@@ -127,6 +127,34 @@ contract FaightersEscrowTest is Test {
         assertEq(usdc.balanceOf(address(escrow)), STAKE_6);
     }
 
+    function testCreateFightForByResolverEmitsAndStoresState() external {
+        bytes32 fightId = _fightId("create-for");
+        _approveToken(address(usdc), playerA, STAKE_6);
+
+        vm.expectEmit(true, true, true, true, address(escrow));
+        emit FightCreated(fightId, playerA, address(usdc), STAKE_6);
+
+        vm.prank(resolver);
+        escrow.createFightFor(fightId, address(usdc), STAKE_6, playerA);
+
+        FaightersEscrow.Fight memory fight = escrow.getFight(fightId);
+        assertEq(fight.playerA, playerA);
+        assertEq(usdc.balanceOf(address(escrow)), STAKE_6);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), STAKE_6);
+    }
+
+    function testCreateFightForRevertsForNonResolver() external {
+        vm.expectRevert(FaightersEscrow.ResolverOnly.selector);
+        vm.prank(attacker);
+        escrow.createFightFor(_fightId("create-for-auth"), address(usdc), STAKE_6, playerA);
+    }
+
+    function testCreateFightForRevertsOnZeroPlayerA() external {
+        vm.expectRevert(FaightersEscrow.ZeroAddress.selector);
+        vm.prank(resolver);
+        escrow.createFightFor(_fightId("create-for-zero"), address(usdc), STAKE_6, address(0));
+    }
+
     function testCreateFightRevertsWithZeroFightId() external {
         _approveToken(address(usdc), playerA, STAKE_6);
         vm.expectRevert(FaightersEscrow.InvalidFightId.selector);
@@ -204,6 +232,43 @@ contract FaightersEscrowTest is Test {
         assertEq(usdc.balanceOf(address(escrow)), STAKE_6 * 2);
     }
 
+    function testJoinFightForByResolverEmitsAndStoresState() external {
+        bytes32 fightId = _fightId("join-for");
+        _createOnly(fightId, address(usdc), STAKE_6);
+        _approveToken(address(usdc), playerB, STAKE_6);
+
+        vm.expectEmit(true, true, false, false, address(escrow));
+        emit FightJoined(fightId, playerB);
+
+        vm.prank(resolver);
+        escrow.joinFightFor(fightId, playerB);
+
+        FaightersEscrow.Fight memory fight = escrow.getFight(fightId);
+        assertEq(fight.playerB, playerB);
+        assertTrue(fight.playerBStaked);
+        assertEq(usdc.balanceOf(address(escrow)), STAKE_6 * 2);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), STAKE_6 * 2);
+    }
+
+    function testJoinFightForRevertsForNonResolver() external {
+        bytes32 fightId = _fightId("join-for-auth");
+        _createOnly(fightId, address(usdc), STAKE_6);
+        _approveToken(address(usdc), playerB, STAKE_6);
+
+        vm.expectRevert(FaightersEscrow.ResolverOnly.selector);
+        vm.prank(attacker);
+        escrow.joinFightFor(fightId, playerB);
+    }
+
+    function testJoinFightForRevertsOnZeroPlayerB() external {
+        bytes32 fightId = _fightId("join-for-zero");
+        _createOnly(fightId, address(usdc), STAKE_6);
+
+        vm.expectRevert(FaightersEscrow.ZeroAddress.selector);
+        vm.prank(resolver);
+        escrow.joinFightFor(fightId, address(0));
+    }
+
     function testJoinFightRevertsWhenFightMissing() external {
         bytes32 fightId = _fightId("missing-join");
         vm.expectRevert(abi.encodeWithSelector(FaightersEscrow.FightNotFound.selector, fightId));
@@ -255,6 +320,8 @@ contract FaightersEscrowTest is Test {
         bytes32 fightId = _fightId("resolve-sairi");
         _createAndJoin(fightId, address(sairi), STAKE_18);
 
+        assertEq(escrow.reservedTokenBalance(address(sairi)), STAKE_18 * 2);
+
         uint256 totalPot = STAKE_18 * 2;
         uint256 winnerPayout = (totalPot * escrow.WINNER_PCT()) / 100;
         uint256 houseCut = totalPot - winnerPayout;
@@ -270,6 +337,7 @@ contract FaightersEscrowTest is Test {
         assertEq(sairi.balanceOf(playerA), winnerBefore + winnerPayout);
         assertEq(sairi.balanceOf(escrow.BURN_ADDRESS()), burnBefore + houseCut);
         assertEq(sairi.balanceOf(address(escrow)), 0);
+        assertEq(escrow.reservedTokenBalance(address(sairi)), 0);
 
         FaightersEscrow.Fight memory fight = escrow.getFight(fightId);
         assertTrue(fight.resolved);
@@ -361,6 +429,8 @@ contract FaightersEscrowTest is Test {
         bytes32 fightId = _fightId("resolve-usdc-swap");
         _createAndJoin(fightId, address(usdc), STAKE_6);
 
+        assertEq(escrow.reservedTokenBalance(address(usdc)), STAKE_6 * 2);
+
         uint256 totalPot = STAKE_6 * 2;
         uint256 winnerPayout = (totalPot * escrow.WINNER_PCT()) / 100;
         uint256 houseCut = totalPot - winnerPayout;
@@ -383,6 +453,7 @@ contract FaightersEscrowTest is Test {
         assertEq(usdc.balanceOf(address(router)), houseCut);
         assertEq(sairi.balanceOf(escrow.BURN_ADDRESS()), burnBefore + expectedSairiOut);
         assertEq(usdc.balanceOf(address(escrow)), 0);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), 0);
 
         assertEq(router.lastTokenIn(), address(usdc));
         assertEq(router.lastTokenOut(), address(sairi));
@@ -438,6 +509,7 @@ contract FaightersEscrowTest is Test {
         assertEq(usdc.balanceOf(playerA), winnerBefore);
         assertEq(usdc.balanceOf(address(escrow)), escrowBefore);
         assertEq(usdc.balanceOf(address(router)), routerBefore);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), STAKE_6 * 2);
     }
 
     function testCancelFightByPlayerABeforeJoinRefundsAndEmits() external {
@@ -454,6 +526,7 @@ contract FaightersEscrowTest is Test {
 
         assertEq(usdc.balanceOf(playerA), playerABefore + STAKE_6);
         assertEq(usdc.balanceOf(address(escrow)), 0);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), 0);
     }
 
     function testCancelFightByResolverBeforeJoinRefundsPlayerA() external {
@@ -481,6 +554,7 @@ contract FaightersEscrowTest is Test {
         assertEq(usdc.balanceOf(playerA), playerABefore + STAKE_6);
         assertEq(usdc.balanceOf(playerB), playerBBefore + STAKE_6);
         assertEq(usdc.balanceOf(address(escrow)), 0);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), 0);
     }
 
     function testCancelFightRevertsForUnauthorizedCaller() external {
@@ -535,6 +609,35 @@ contract FaightersEscrowTest is Test {
         assertEq(stuck.balanceOf(address(escrow)), 0);
     }
 
+    function testEmergencyWithdrawOnlyWithdrawsSurplusWithReservedLiabilities() external {
+        bytes32 fightId = _fightId("withdraw-surplus");
+        _createAndJoin(fightId, address(usdc), STAKE_6);
+
+        uint256 reserved = STAKE_6 * 2;
+        uint256 surplus = 25e6;
+        usdc.mint(address(escrow), surplus);
+
+        assertEq(escrow.getWithdrawableSurplus(address(usdc)), surplus);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), reserved);
+
+        vm.prank(owner);
+        escrow.emergencyWithdraw(address(usdc));
+
+        assertEq(usdc.balanceOf(owner), surplus);
+        assertEq(usdc.balanceOf(address(escrow)), reserved);
+        assertEq(escrow.getWithdrawableSurplus(address(usdc)), 0);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), reserved);
+    }
+
+    function testEmergencyWithdrawRevertsWhenNoSurplusAvailable() external {
+        bytes32 fightId = _fightId("withdraw-no-surplus");
+        _createAndJoin(fightId, address(usdc), STAKE_6);
+
+        vm.expectRevert(abi.encodeWithSelector(FaightersEscrow.NoSurplusAvailable.selector, address(usdc)));
+        vm.prank(owner);
+        escrow.emergencyWithdraw(address(usdc));
+    }
+
     function testEmergencyWithdrawRevertsForNonOwner() external {
         MockERC20 stuck = new MockERC20("Stuck", "STK");
         stuck.mint(address(escrow), 1 ether);
@@ -572,6 +675,7 @@ contract FaightersEscrowTest is Test {
         FaightersEscrow.Fight memory fight = escrow.getFight(fightId);
         assertEq(fight.stakeAmount, stake);
         assertEq(usdc.balanceOf(address(escrow)), stake);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), stake);
     }
 
     function testFuzzResolveSairiPayoutConservation(uint96 rawStake) external {
@@ -595,6 +699,7 @@ contract FaightersEscrowTest is Test {
 
         assertEq(winnerDelta + burnDelta, totalPot);
         assertEq(sairi.balanceOf(address(escrow)), 0);
+        assertEq(escrow.reservedTokenBalance(address(sairi)), 0);
     }
 
     function _createOnly(bytes32 fightId, address token, uint256 stake) internal {

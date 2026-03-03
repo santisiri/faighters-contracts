@@ -33,6 +33,8 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
 
     /// @notice Resolver wallet allowed to resolve and house-cancel fights.
     address public resolver;
+    /// @notice Total amount currently reserved for unresolved fights, by token.
+    mapping(address => uint256) public reservedTokenBalance;
 
     struct Fight {
         bytes32 fightId;
@@ -63,6 +65,7 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
     error ZeroAddress();
     error MinSairiOutRequired();
     error InvalidPercentConfig();
+    error NoSurplusAvailable(address token);
 
     event ResolverUpdated(address indexed previousResolver, address indexed newResolver);
     event FightCreated(bytes32 indexed fightId, address indexed playerA, address indexed token, uint256 stakeAmount);
@@ -114,6 +117,44 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
     /// @param token ERC-20 token address used by both players.
     /// @param stakeAmount Stake per player, denominated in token units.
     function createFight(bytes32 fightId, address token, uint256 stakeAmount) external nonReentrant {
+        _createFight(fightId, token, stakeAmount, msg.sender);
+    }
+
+    /// @notice Creates a fight and stakes from `playerA`, callable only by resolver backend.
+    /// @dev `playerA` must have approved this contract for at least `stakeAmount`.
+    /// @param fightId Unique identifier matching off-chain session id bytes32.
+    /// @param token ERC-20 token address used by both players.
+    /// @param stakeAmount Stake per player, denominated in token units.
+    /// @param playerA Player A address whose funds are pulled.
+    function createFightFor(bytes32 fightId, address token, uint256 stakeAmount, address playerA)
+        external
+        nonReentrant
+        onlyResolver
+    {
+        if (playerA == address(0)) {
+            revert ZeroAddress();
+        }
+        _createFight(fightId, token, stakeAmount, playerA);
+    }
+
+    /// @notice Joins an existing fight and stakes from caller.
+    /// @param fightId Fight identifier.
+    function joinFight(bytes32 fightId) external nonReentrant {
+        _joinFight(fightId, msg.sender);
+    }
+
+    /// @notice Joins an existing fight and stakes from `playerB`, callable only by resolver backend.
+    /// @dev `playerB` must have approved this contract for the fight stake amount.
+    /// @param fightId Fight identifier.
+    /// @param playerB Player B address whose funds are pulled.
+    function joinFightFor(bytes32 fightId, address playerB) external nonReentrant onlyResolver {
+        if (playerB == address(0)) {
+            revert ZeroAddress();
+        }
+        _joinFight(fightId, playerB);
+    }
+
+    function _createFight(bytes32 fightId, address token, uint256 stakeAmount, address playerA) internal {
         if (fightId == bytes32(0)) {
             revert InvalidFightId();
         }
@@ -129,13 +170,14 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
             revert FightAlreadyExists(fightId);
         }
 
-        IERC20(token).safeTransferFrom(msg.sender, address(this), stakeAmount);
+        IERC20(token).safeTransferFrom(playerA, address(this), stakeAmount);
+        reservedTokenBalance[token] += stakeAmount;
 
         fights[fightId] = Fight({
             fightId: fightId,
             tokenUsed: token,
             stakeAmount: stakeAmount,
-            playerA: msg.sender,
+            playerA: playerA,
             playerB: address(0),
             playerAStaked: true,
             playerBStaked: false,
@@ -143,12 +185,10 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
             winner: address(0)
         });
 
-        emit FightCreated(fightId, msg.sender, token, stakeAmount);
+        emit FightCreated(fightId, playerA, token, stakeAmount);
     }
 
-    /// @notice Joins an existing fight and stakes the same token and amount as player A.
-    /// @param fightId Fight identifier.
-    function joinFight(bytes32 fightId) external nonReentrant {
+    function _joinFight(bytes32 fightId, address playerB) internal {
         Fight storage fight = fights[fightId];
         if (fight.playerA == address(0)) {
             revert FightNotFound(fightId);
@@ -159,15 +199,17 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
         if (fight.playerBStaked) {
             revert AlreadyJoined(fightId);
         }
-        if (msg.sender == fight.playerA) {
+        if (playerB == fight.playerA) {
             revert CannotJoinOwnFight();
         }
 
-        IERC20(fight.tokenUsed).safeTransferFrom(msg.sender, address(this), fight.stakeAmount);
-        fight.playerB = msg.sender;
+        IERC20(fight.tokenUsed).safeTransferFrom(playerB, address(this), fight.stakeAmount);
+        reservedTokenBalance[fight.tokenUsed] += fight.stakeAmount;
+
+        fight.playerB = playerB;
         fight.playerBStaked = true;
 
-        emit FightJoined(fightId, msg.sender);
+        emit FightJoined(fightId, playerB);
     }
 
     /// @notice Resolves a fight in SAIRI mode (no swap required).
@@ -209,6 +251,15 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
             revert Unauthorized();
         }
 
+        uint256 refundAmount;
+        if (fight.playerAStaked) {
+            refundAmount += fight.stakeAmount;
+        }
+        if (fight.playerBStaked) {
+            refundAmount += fight.stakeAmount;
+        }
+
+        reservedTokenBalance[fight.tokenUsed] -= refundAmount;
         fight.resolved = true;
         fight.winner = address(0);
 
@@ -231,11 +282,27 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
     }
 
     /// @notice Allows owner to recover ERC-20 tokens held by this contract.
-    /// @param token Token address to withdraw.
+    /// @dev Withdraws only non-reserved surplus so unresolved fight liabilities remain fully backed.
+    /// @param token Token address to withdraw surplus for.
     function emergencyWithdraw(address token) external onlyOwner nonReentrant {
-        uint256 amount = IERC20(token).balanceOf(address(this));
+        uint256 amount = getWithdrawableSurplus(token);
+        if (amount == 0) {
+            revert NoSurplusAvailable(token);
+        }
         IERC20(token).safeTransfer(owner(), amount);
         emit EmergencyWithdraw(token, owner(), amount);
+    }
+
+    /// @notice Returns withdrawable surplus for a token after reserving unresolved-fight liabilities.
+    /// @param token Token address to query.
+    /// @return amount Withdrawable surplus amount.
+    function getWithdrawableSurplus(address token) public view returns (uint256 amount) {
+        uint256 balance = IERC20(token).balanceOf(address(this));
+        uint256 reserved = reservedTokenBalance[token];
+        if (balance > reserved) {
+            return balance - reserved;
+        }
+        return 0;
     }
 
     function _resolveFight(bytes32 fightId, address winnerAddress, uint256 minSairiOut) internal {
@@ -257,6 +324,7 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
         uint256 winnerPayout = (totalPot * WINNER_PCT) / 100;
         uint256 houseCut = totalPot - winnerPayout;
 
+        reservedTokenBalance[fight.tokenUsed] -= totalPot;
         fight.resolved = true;
         fight.winner = winnerAddress;
 
