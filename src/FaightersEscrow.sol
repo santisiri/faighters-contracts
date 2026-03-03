@@ -18,7 +18,7 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
     /// @notice Supported USDT token on Base.
     address public constant USDT = 0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2;
     /// @notice Supported SAIRI token on Base.
-    address public constant SAIRI = 0xde61878b0b21ce395266c44d4d548d1c72a3eb07;
+    address public constant SAIRI = 0xde61878b0b21ce395266c44D4d548D1C72A3eB07;
     /// @notice Uniswap V3 SwapRouter on Base.
     address public constant SWAP_ROUTER = 0x2626664c2603336E57B271c5C0b26F421741e481;
     /// @notice Burn sink address.
