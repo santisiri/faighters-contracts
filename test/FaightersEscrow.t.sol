@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import {FaightersEscrow} from "../src/FaightersEscrow.sol";
@@ -104,6 +105,72 @@ contract FaightersEscrowTest is Test {
         escrow.setResolver(address(0));
     }
 
+    function testPauseAndUnpauseByOwner() external {
+        vm.prank(owner);
+        escrow.pause();
+        assertTrue(escrow.paused());
+
+        vm.prank(owner);
+        escrow.unpause();
+        assertFalse(escrow.paused());
+    }
+
+    function testPauseRevertsForNonOwner() external {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        vm.prank(attacker);
+        escrow.pause();
+    }
+
+    function testUnpauseRevertsForNonOwner() external {
+        vm.prank(owner);
+        escrow.pause();
+
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        vm.prank(attacker);
+        escrow.unpause();
+    }
+
+    function testPausedBlocksCreateJoinResolveAndCancel() external {
+        bytes32 fightIdCreate = _fightId("paused-create");
+        _approveToken(address(usdc), playerA, STAKE_6);
+
+        vm.prank(owner);
+        escrow.pause();
+
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.prank(playerA);
+        escrow.createFight(fightIdCreate, address(usdc), STAKE_6);
+
+        vm.prank(owner);
+        escrow.unpause();
+        _createAndJoin(_fightId("paused-flow"), address(usdc), STAKE_6);
+        bytes32 fightId = _fightId("paused-flow");
+
+        vm.prank(owner);
+        escrow.pause();
+
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.prank(resolver);
+        escrow.resolveFight(fightId, playerA, 1);
+
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.prank(resolver);
+        escrow.cancelFight(fightId);
+
+        vm.prank(owner);
+        escrow.unpause();
+
+        bytes32 fightIdJoin = _fightId("paused-join");
+        _createOnly(fightIdJoin, address(usdc), STAKE_6);
+        vm.prank(owner);
+        escrow.pause();
+
+        _approveToken(address(usdc), playerB, STAKE_6);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        vm.prank(playerB);
+        escrow.joinFight(fightIdJoin);
+    }
+
     function testCreateFightEmitsAndStoresState() external {
         bytes32 fightId = _fightId("create");
         _approveToken(address(usdc), playerA, STAKE_6);
@@ -143,6 +210,20 @@ contract FaightersEscrowTest is Test {
         assertEq(escrow.reservedTokenBalance(address(usdc)), STAKE_6);
     }
 
+    function testCreateFightWithDeadlinesStoresValues() external {
+        bytes32 fightId = _fightId("create-deadlines");
+        uint256 joinDeadline = block.timestamp + 1 days;
+        uint256 resolveDeadline = block.timestamp + 2 days;
+
+        _approveToken(address(usdc), playerA, STAKE_6);
+        vm.prank(playerA);
+        escrow.createFightWithDeadlines(fightId, address(usdc), STAKE_6, joinDeadline, resolveDeadline);
+
+        FaightersEscrow.Fight memory fight = escrow.getFight(fightId);
+        assertEq(fight.joinDeadline, joinDeadline);
+        assertEq(fight.resolveDeadline, resolveDeadline);
+    }
+
     function testCreateFightForRevertsForNonResolver() external {
         vm.expectRevert(FaightersEscrow.ResolverOnly.selector);
         vm.prank(attacker);
@@ -153,6 +234,50 @@ contract FaightersEscrowTest is Test {
         vm.expectRevert(FaightersEscrow.ZeroAddress.selector);
         vm.prank(resolver);
         escrow.createFightFor(_fightId("create-for-zero"), address(usdc), STAKE_6, address(0));
+    }
+
+    function testCreateFightForWithDeadlinesByResolver() external {
+        bytes32 fightId = _fightId("create-for-deadlines");
+        uint256 joinDeadline = block.timestamp + 4 hours;
+        uint256 resolveDeadline = block.timestamp + 9 hours;
+
+        _approveToken(address(usdc), playerA, STAKE_6);
+        vm.prank(resolver);
+        escrow.createFightForWithDeadlines(
+            fightId, address(usdc), STAKE_6, playerA, joinDeadline, resolveDeadline
+        );
+
+        FaightersEscrow.Fight memory fight = escrow.getFight(fightId);
+        assertEq(fight.playerA, playerA);
+        assertEq(fight.joinDeadline, joinDeadline);
+        assertEq(fight.resolveDeadline, resolveDeadline);
+    }
+
+    function testCreateFightWithDeadlinesRevertsWhenJoinDeadlineNotFuture() external {
+        _approveToken(address(usdc), playerA, STAKE_6);
+        vm.expectRevert(FaightersEscrow.InvalidDeadlineWindow.selector);
+        vm.prank(playerA);
+        escrow.createFightWithDeadlines(
+            _fightId("bad-join-deadline"), address(usdc), STAKE_6, block.timestamp, block.timestamp + 1 days
+        );
+    }
+
+    function testCreateFightWithDeadlinesRevertsWhenResolveDeadlineNotFuture() external {
+        _approveToken(address(usdc), playerA, STAKE_6);
+        vm.expectRevert(FaightersEscrow.InvalidDeadlineWindow.selector);
+        vm.prank(playerA);
+        escrow.createFightWithDeadlines(
+            _fightId("bad-resolve-deadline"), address(usdc), STAKE_6, block.timestamp + 1 days, block.timestamp
+        );
+    }
+
+    function testCreateFightWithDeadlinesRevertsWhenResolveNotAfterJoin() external {
+        _approveToken(address(usdc), playerA, STAKE_6);
+        vm.expectRevert(FaightersEscrow.InvalidDeadlineWindow.selector);
+        vm.prank(playerA);
+        escrow.createFightWithDeadlines(
+            _fightId("bad-window-order"), address(usdc), STAKE_6, block.timestamp + 2 days, block.timestamp + 1 days
+        );
     }
 
     function testCreateFightRevertsWithZeroFightId() external {
@@ -316,6 +441,41 @@ contract FaightersEscrowTest is Test {
         escrow.joinFight(fightId);
     }
 
+    function testJoinFightRevertsWhenJoinDeadlinePassed() external {
+        bytes32 fightId = _fightId("join-deadline-expired");
+        uint256 joinDeadline = block.timestamp + 1;
+        uint256 resolveDeadline = block.timestamp + 1 days;
+
+        _approveToken(address(usdc), playerA, STAKE_6);
+        vm.prank(playerA);
+        escrow.createFightWithDeadlines(fightId, address(usdc), STAKE_6, joinDeadline, resolveDeadline);
+
+        vm.warp(joinDeadline + 1);
+        _approveToken(address(usdc), playerB, STAKE_6);
+
+        vm.expectRevert(abi.encodeWithSelector(FaightersEscrow.JoinDeadlinePassed.selector, fightId, joinDeadline));
+        vm.prank(playerB);
+        escrow.joinFight(fightId);
+    }
+
+    function testJoinFightAtExactJoinDeadlineSucceeds() external {
+        bytes32 fightId = _fightId("join-at-deadline");
+        uint256 joinDeadline = block.timestamp + 100;
+
+        _approveToken(address(usdc), playerA, STAKE_6);
+        vm.prank(playerA);
+        escrow.createFightWithDeadlines(fightId, address(usdc), STAKE_6, joinDeadline, block.timestamp + 1 days);
+
+        vm.warp(joinDeadline);
+        _approveToken(address(usdc), playerB, STAKE_6);
+        vm.prank(playerB);
+        escrow.joinFight(fightId);
+
+        FaightersEscrow.Fight memory fight = escrow.getFight(fightId);
+        assertEq(fight.playerB, playerB);
+        assertTrue(fight.playerBStaked);
+    }
+
     function testResolveFightSairiPathPaysWinnerBurnsAndEmits() external {
         bytes32 fightId = _fightId("resolve-sairi");
         _createAndJoin(fightId, address(sairi), STAKE_18);
@@ -423,6 +583,49 @@ contract FaightersEscrowTest is Test {
         vm.expectRevert(abi.encodeWithSelector(FaightersEscrow.FightResolvedAlready.selector, fightId));
         vm.prank(resolver);
         escrow.resolveFight(fightId, playerA);
+    }
+
+    function testResolveFightRevertsWhenResolveDeadlinePassed() external {
+        bytes32 fightId = _fightId("resolve-deadline-expired");
+        uint256 joinDeadline = block.timestamp + 1 hours;
+        uint256 resolveDeadline = block.timestamp + 2 hours;
+
+        _approveToken(address(usdc), playerA, STAKE_6);
+        vm.prank(playerA);
+        escrow.createFightWithDeadlines(fightId, address(usdc), STAKE_6, joinDeadline, resolveDeadline);
+
+        _approveToken(address(usdc), playerB, STAKE_6);
+        vm.prank(playerB);
+        escrow.joinFight(fightId);
+
+        vm.warp(resolveDeadline + 1);
+        vm.expectRevert(
+            abi.encodeWithSelector(FaightersEscrow.ResolveDeadlinePassed.selector, fightId, resolveDeadline)
+        );
+        vm.prank(resolver);
+        escrow.resolveFight(fightId, playerA, 1);
+    }
+
+    function testResolveFightAtExactResolveDeadlineSucceeds() external {
+        bytes32 fightId = _fightId("resolve-at-deadline");
+        uint256 joinDeadline = block.timestamp + 100;
+        uint256 resolveDeadline = block.timestamp + 200;
+
+        _approveToken(address(sairi), playerA, STAKE_18);
+        vm.prank(playerA);
+        escrow.createFightWithDeadlines(fightId, address(sairi), STAKE_18, joinDeadline, resolveDeadline);
+
+        vm.warp(joinDeadline);
+        _approveToken(address(sairi), playerB, STAKE_18);
+        vm.prank(playerB);
+        escrow.joinFight(fightId);
+
+        vm.warp(resolveDeadline);
+        vm.prank(resolver);
+        escrow.resolveFight(fightId, playerA);
+
+        FaightersEscrow.Fight memory fight = escrow.getFight(fightId);
+        assertTrue(fight.resolved);
     }
 
     function testResolveFightSwapPathPaysWinnerSwapsBurnsAndEmits() external {
@@ -654,6 +857,8 @@ contract FaightersEscrowTest is Test {
         assertEq(fight.fightId, bytes32(0));
         assertEq(fight.tokenUsed, address(0));
         assertEq(fight.stakeAmount, 0);
+        assertEq(fight.joinDeadline, 0);
+        assertEq(fight.resolveDeadline, 0);
         assertEq(fight.playerA, address(0));
         assertEq(fight.playerB, address(0));
         assertFalse(fight.playerAStaked);

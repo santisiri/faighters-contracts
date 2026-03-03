@@ -2,13 +2,14 @@
 pragma solidity ^0.8.20;
 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 import {ISwapRouter} from "./interfaces/ISwapRouter.sol";
 
-contract FaightersEscrow is Ownable, ReentrancyGuard {
+contract FaightersEscrow is Ownable, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     /// @notice Supported WETH token on Base.
@@ -40,6 +41,8 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
         bytes32 fightId;
         address tokenUsed;
         uint256 stakeAmount;
+        uint256 joinDeadline;
+        uint256 resolveDeadline;
         address playerA;
         address playerB;
         bool playerAStaked;
@@ -66,6 +69,9 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
     error MinSairiOutRequired();
     error InvalidPercentConfig();
     error NoSurplusAvailable(address token);
+    error InvalidDeadlineWindow();
+    error JoinDeadlinePassed(bytes32 fightId, uint256 joinDeadline);
+    error ResolveDeadlinePassed(bytes32 fightId, uint256 resolveDeadline);
 
     event ResolverUpdated(address indexed previousResolver, address indexed newResolver);
     event FightCreated(bytes32 indexed fightId, address indexed playerA, address indexed token, uint256 stakeAmount);
@@ -112,12 +118,41 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
         emit ResolverUpdated(oldResolver, newResolver);
     }
 
+    /// @notice Pauses fight lifecycle operations.
+    /// @dev Owner-only emergency control for create/join/resolve/cancel flows.
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    /// @notice Unpauses fight lifecycle operations.
+    /// @dev Owner-only operation to resume normal flow.
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
     /// @notice Creates a fight and stakes `stakeAmount` from player A.
     /// @param fightId Unique identifier matching off-chain session id bytes32.
     /// @param token ERC-20 token address used by both players.
     /// @param stakeAmount Stake per player, denominated in token units.
-    function createFight(bytes32 fightId, address token, uint256 stakeAmount) external nonReentrant {
-        _createFight(fightId, token, stakeAmount, msg.sender);
+    function createFight(bytes32 fightId, address token, uint256 stakeAmount) external nonReentrant whenNotPaused {
+        _createFight(fightId, token, stakeAmount, msg.sender, 0, 0);
+    }
+
+    /// @notice Creates a fight with optional join and resolve deadlines.
+    /// @dev Use `0` for either deadline to disable that constraint.
+    /// @param fightId Unique identifier matching off-chain session id bytes32.
+    /// @param token ERC-20 token address used by both players.
+    /// @param stakeAmount Stake per player, denominated in token units.
+    /// @param joinDeadline Latest timestamp allowed for player B to join. `0` disables.
+    /// @param resolveDeadline Latest timestamp allowed for resolver to resolve. `0` disables.
+    function createFightWithDeadlines(
+        bytes32 fightId,
+        address token,
+        uint256 stakeAmount,
+        uint256 joinDeadline,
+        uint256 resolveDeadline
+    ) external nonReentrant whenNotPaused {
+        _createFight(fightId, token, stakeAmount, msg.sender, joinDeadline, resolveDeadline);
     }
 
     /// @notice Creates a fight and stakes from `playerA`, callable only by resolver backend.
@@ -130,16 +165,39 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
         external
         nonReentrant
         onlyResolver
+        whenNotPaused
     {
         if (playerA == address(0)) {
             revert ZeroAddress();
         }
-        _createFight(fightId, token, stakeAmount, playerA);
+        _createFight(fightId, token, stakeAmount, playerA, 0, 0);
+    }
+
+    /// @notice Creates a fight with optional deadlines and stakes from `playerA`, callable only by resolver backend.
+    /// @dev `playerA` must have approved this contract for at least `stakeAmount`.
+    /// @param fightId Unique identifier matching off-chain session id bytes32.
+    /// @param token ERC-20 token address used by both players.
+    /// @param stakeAmount Stake per player, denominated in token units.
+    /// @param playerA Player A address whose funds are pulled.
+    /// @param joinDeadline Latest timestamp allowed for player B to join. `0` disables.
+    /// @param resolveDeadline Latest timestamp allowed for resolver to resolve. `0` disables.
+    function createFightForWithDeadlines(
+        bytes32 fightId,
+        address token,
+        uint256 stakeAmount,
+        address playerA,
+        uint256 joinDeadline,
+        uint256 resolveDeadline
+    ) external nonReentrant onlyResolver whenNotPaused {
+        if (playerA == address(0)) {
+            revert ZeroAddress();
+        }
+        _createFight(fightId, token, stakeAmount, playerA, joinDeadline, resolveDeadline);
     }
 
     /// @notice Joins an existing fight and stakes from caller.
     /// @param fightId Fight identifier.
-    function joinFight(bytes32 fightId) external nonReentrant {
+    function joinFight(bytes32 fightId) external nonReentrant whenNotPaused {
         _joinFight(fightId, msg.sender);
     }
 
@@ -147,14 +205,21 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
     /// @dev `playerB` must have approved this contract for the fight stake amount.
     /// @param fightId Fight identifier.
     /// @param playerB Player B address whose funds are pulled.
-    function joinFightFor(bytes32 fightId, address playerB) external nonReentrant onlyResolver {
+    function joinFightFor(bytes32 fightId, address playerB) external nonReentrant onlyResolver whenNotPaused {
         if (playerB == address(0)) {
             revert ZeroAddress();
         }
         _joinFight(fightId, playerB);
     }
 
-    function _createFight(bytes32 fightId, address token, uint256 stakeAmount, address playerA) internal {
+    function _createFight(
+        bytes32 fightId,
+        address token,
+        uint256 stakeAmount,
+        address playerA,
+        uint256 joinDeadline,
+        uint256 resolveDeadline
+    ) internal {
         if (fightId == bytes32(0)) {
             revert InvalidFightId();
         }
@@ -169,6 +234,7 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
         if (fight.playerA != address(0)) {
             revert FightAlreadyExists(fightId);
         }
+        _validateDeadlines(joinDeadline, resolveDeadline);
 
         IERC20(token).safeTransferFrom(playerA, address(this), stakeAmount);
         reservedTokenBalance[token] += stakeAmount;
@@ -177,6 +243,8 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
             fightId: fightId,
             tokenUsed: token,
             stakeAmount: stakeAmount,
+            joinDeadline: joinDeadline,
+            resolveDeadline: resolveDeadline,
             playerA: playerA,
             playerB: address(0),
             playerAStaked: true,
@@ -202,6 +270,9 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
         if (playerB == fight.playerA) {
             revert CannotJoinOwnFight();
         }
+        if (fight.joinDeadline != 0 && block.timestamp > fight.joinDeadline) {
+            revert JoinDeadlinePassed(fightId, fight.joinDeadline);
+        }
 
         IERC20(fight.tokenUsed).safeTransferFrom(playerB, address(this), fight.stakeAmount);
         reservedTokenBalance[fight.tokenUsed] += fight.stakeAmount;
@@ -216,7 +287,7 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
     /// @dev For non-SAIRI fights, use `resolveFight(bytes32,address,uint256)` with slippage protection.
     /// @param fightId Fight identifier.
     /// @param winnerAddress Winner address, must be one of the two fighters.
-    function resolveFight(bytes32 fightId, address winnerAddress) external nonReentrant onlyResolver {
+    function resolveFight(bytes32 fightId, address winnerAddress) external nonReentrant onlyResolver whenNotPaused {
         _resolveFight(fightId, winnerAddress, 0);
     }
 
@@ -229,6 +300,7 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
         external
         nonReentrant
         onlyResolver
+        whenNotPaused
     {
         _resolveFight(fightId, winnerAddress, minSairiOut);
     }
@@ -236,7 +308,7 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
     /// @notice Cancels a fight and refunds staked funds.
     /// @dev Callable by resolver anytime before resolution, or by player A only before player B joins.
     /// @param fightId Fight identifier.
-    function cancelFight(bytes32 fightId) external nonReentrant {
+    function cancelFight(bytes32 fightId) external nonReentrant whenNotPaused {
         Fight storage fight = fights[fightId];
         if (fight.playerA == address(0)) {
             revert FightNotFound(fightId);
@@ -319,6 +391,9 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
         if (winnerAddress != fight.playerA && winnerAddress != fight.playerB) {
             revert InvalidWinner(winnerAddress);
         }
+        if (fight.resolveDeadline != 0 && block.timestamp > fight.resolveDeadline) {
+            revert ResolveDeadlinePassed(fightId, fight.resolveDeadline);
+        }
 
         uint256 totalPot = fight.stakeAmount * 2;
         uint256 winnerPayout = (totalPot * WINNER_PCT) / 100;
@@ -362,5 +437,17 @@ contract FaightersEscrow is Ownable, ReentrancyGuard {
 
     function _isSupportedToken(address token) internal pure returns (bool) {
         return token == WETH || token == USDC || token == USDT || token == SAIRI;
+    }
+
+    function _validateDeadlines(uint256 joinDeadline, uint256 resolveDeadline) internal view {
+        if (joinDeadline != 0 && joinDeadline <= block.timestamp) {
+            revert InvalidDeadlineWindow();
+        }
+        if (resolveDeadline != 0 && resolveDeadline <= block.timestamp) {
+            revert InvalidDeadlineWindow();
+        }
+        if (joinDeadline != 0 && resolveDeadline != 0 && resolveDeadline <= joinDeadline) {
+            revert InvalidDeadlineWindow();
+        }
     }
 }
