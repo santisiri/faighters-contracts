@@ -323,7 +323,7 @@ contract FaightersEscrow is Ownable, Pausable, ReentrancyGuard {
             revert Unauthorized();
         }
 
-        uint256 refundAmount;
+        uint256 refundAmount = 0;
         if (fight.playerAStaked) {
             refundAmount += fight.stakeAmount;
         }
@@ -358,7 +358,7 @@ contract FaightersEscrow is Ownable, Pausable, ReentrancyGuard {
     /// @param token Token address to withdraw surplus for.
     function emergencyWithdraw(address token) external onlyOwner nonReentrant {
         uint256 amount = getWithdrawableSurplus(token);
-        if (amount == 0) {
+        if (amount < 1) {
             revert NoSurplusAvailable(token);
         }
         IERC20(token).safeTransfer(owner(), amount);
