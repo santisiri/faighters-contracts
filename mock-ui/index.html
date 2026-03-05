@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FaightersEscrow Mock Console</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-grid" aria-hidden="true"></div>
+    <div class="bg-orb orb-a" aria-hidden="true"></div>
+    <div class="bg-orb orb-b" aria-hidden="true"></div>
+
+    <header class="hero reveal">
+      <div>
+        <p class="eyebrow">Base Mainnet Contract Simulator</p>
+        <h1>FaightersEscrow Mock Console</h1>
+        <p class="subtitle">
+          Interactive state machine to understand every major rule in
+          <code>FaightersEscrow.sol</code>: roles, staking lifecycle,
+          deadlines, swap-and-burn, liabilities, pause controls, and
+          emergency recovery.
+        </p>
+      </div>
+      <div class="hero-controls">
+        <label>
+          Active Caller
+          <select id="activeCaller"></select>
+        </label>
+        <label>
+          Simulated Time (unix)
+          <input id="nowTs" type="number" />
+        </label>
+        <div class="row">
+          <button id="warpPlus1h" class="btn ghost">+1h</button>
+          <button id="warpPlus1d" class="btn ghost">+1d</button>
+          <button id="resetState" class="btn danger">Reset</button>
+        </div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel reveal">
+        <h2>Contract Context</h2>
+        <div class="meta-grid">
+          <article>
+            <h3>Roles</h3>
+            <ul class="kv" id="roleSummary"></ul>
+          </article>
+          <article>
+            <h3>Addresses (Base)</h3>
+            <ul class="kv mono">
+              <li><span>WETH</span><code>0x4200000000000000000000000000000000000006</code></li>
+              <li><span>USDC</span><code>0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913</code></li>
+              <li><span>USDT</span><code>0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2</code></li>
+              <li><span>SAIRI</span><code>0xde61878b0b21ce395266c44D4d548D1C72A3eB07</code></li>
+              <li><span>Router</span><code>0x2626664c2603336E57B271c5C0b26F421741e481</code></li>
+              <li><span>Burn</span><code>0x000000000000000000000000000000000000dEaD</code></li>
+            </ul>
+          </article>
+          <article>
+            <h3>Global Flags</h3>
+            <ul class="kv" id="globalFlags"></ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel reveal">
+        <h2>Lifecycle Simulator</h2>
+        <p class="hint">
+          Use these controls in sequence: create -> join -> resolve/cancel.
+          Resolver-only and owner-only checks are enforced.
+        </p>
+
+        <div class="card-stack">
+          <article class="card">
+            <h3>Create Fight</h3>
+            <div class="grid two">
+              <label>fightId <input id="createFightId" placeholder="fight-demo-001" /></label>
+              <label>token
+                <select id="createToken"></select>
+              </label>
+              <label>stakeAmount (token units)
+                <input id="createStake" type="number" min="1" value="100" />
+              </label>
+              <label>playerA
+                <select id="createPlayerA"></select>
+              </label>
+              <label>joinDeadline (optional unix)
+                <input id="createJoinDeadline" type="number" placeholder="0" />
+              </label>
+              <label>resolveDeadline (optional unix)
+                <input id="createResolveDeadline" type="number" placeholder="0" />
+              </label>
+            </div>
+            <div class="row">
+              <button id="btnCreateFight" class="btn">createFight</button>
+              <button id="btnCreateFightWithDeadlines" class="btn">createFightWithDeadlines</button>
+              <button id="btnCreateFightFor" class="btn ghost">createFightFor</button>
+              <button id="btnCreateFightForWithDeadlines" class="btn ghost">createFightForWithDeadlines</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Join Fight</h3>
+            <div class="grid two">
+              <label>fightId <input id="joinFightId" placeholder="fight-demo-001" /></label>
+              <label>playerB
+                <select id="joinPlayerB"></select>
+              </label>
+            </div>
+            <div class="row">
+              <button id="btnJoinFight" class="btn">joinFight</button>
+              <button id="btnJoinFightFor" class="btn ghost">joinFightFor</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Resolve Fight</h3>
+            <div class="grid two">
+              <label>fightId <input id="resolveFightId" placeholder="fight-demo-001" /></label>
+              <label>winnerAddress
+                <select id="resolveWinner"></select>
+              </label>
+              <label>minSairiOut (for non-SAIRI)
+                <input id="resolveMinOut" type="number" min="0" value="1" />
+              </label>
+              <label>simulatedSwapOut (mock quote)
+                <input id="resolveSwapOut" type="number" min="0" value="120" />
+              </label>
+            </div>
+            <div class="row">
+              <button id="btnResolveFight2" class="btn">resolveFight(fightId,winner)</button>
+              <button id="btnResolveFight3" class="btn">resolveFight(fightId,winner,minOut)</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <h3>Cancel + Admin</h3>
+            <div class="grid two">
+              <label>fightId <input id="cancelFightId" placeholder="fight-demo-001" /></label>
+              <label>newResolver
+                <select id="newResolver"></select>
+              </label>
+              <label>withdraw token
+                <select id="withdrawToken"></select>
+              </label>
+              <div class="inline-actions">
+                <button id="btnPause" class="btn ghost">pause()</button>
+                <button id="btnUnpause" class="btn ghost">unpause()</button>
+              </div>
+            </div>
+            <div class="row">
+              <button id="btnCancelFight" class="btn">cancelFight</button>
+              <button id="btnSetResolver" class="btn ghost">setResolver</button>
+              <button id="btnEmergencyWithdraw" class="btn danger">emergencyWithdraw</button>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel reveal">
+        <h2>Fight Registry</h2>
+        <div class="table-wrap">
+          <table id="fightTable">
+            <thead>
+              <tr>
+                <th>fightId</th>
+                <th>token</th>
+                <th>stake</th>
+                <th>A</th>
+                <th>B</th>
+                <th>A staked</th>
+                <th>B staked</th>
+                <th>resolved</th>
+                <th>winner</th>
+                <th>join dl</th>
+                <th>resolve dl</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel reveal">
+        <h2>Balances + Reserved Liabilities</h2>
+        <div class="split">
+          <div class="table-wrap">
+            <table id="balanceTable">
+              <thead>
+                <tr>
+                  <th>account</th>
+                  <th>WETH</th>
+                  <th>USDC</th>
+                  <th>USDT</th>
+                  <th>SAIRI</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="stats" id="reserveCards"></div>
+        </div>
+      </section>
+
+      <section class="panel reveal">
+        <h2>Function Permissions + Error Map</h2>
+        <div class="split">
+          <article class="card mini">
+            <h3>Access Matrix</h3>
+            <ul class="kv">
+              <li><span>createFight*</span><strong>player or resolver*</strong></li>
+              <li><span>joinFight*</span><strong>player or resolver*</strong></li>
+              <li><span>resolveFight*</span><strong>resolver only</strong></li>
+              <li><span>cancelFight</span><strong>resolver or playerA pre-join</strong></li>
+              <li><span>setResolver/pause/unpause</span><strong>owner only</strong></li>
+              <li><span>emergencyWithdraw</span><strong>owner only + surplus only</strong></li>
+            </ul>
+            <p class="hint">*Resolver variants are <code>createFightFor*</code> and <code>joinFightFor</code>.</p>
+          </article>
+
+          <article class="card mini">
+            <h3>Common Reverts</h3>
+            <ul class="errors">
+              <li><code>ResolverOnly</code></li>
+              <li><code>Unauthorized</code></li>
+              <li><code>FightNotFound</code></li>
+              <li><code>FightAlreadyExists</code></li>
+              <li><code>FightNotReady</code></li>
+              <li><code>FightResolvedAlready</code></li>
+              <li><code>InvalidWinner</code></li>
+              <li><code>InvalidDeadlineWindow</code></li>
+              <li><code>JoinDeadlinePassed</code></li>
+              <li><code>ResolveDeadlinePassed</code></li>
+              <li><code>MinSairiOutRequired</code></li>
+              <li><code>NoSurplusAvailable</code></li>
+            </ul>
+          </article>
+
+          <article class="card mini">
+            <h3>Invariant Watch</h3>
+            <ul id="invariantList" class="checks"></ul>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel reveal">
+        <h2>Event Stream</h2>
+        <div id="eventFeed" class="event-feed"></div>
+      </section>
+    </main>
+
+    <template id="eventTemplate">
+      <article class="event-item">
+        <p class="event-meta"></p>
+        <pre class="event-body"></pre>
+      </article>
+    </template>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
