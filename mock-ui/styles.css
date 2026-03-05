@@ -106,6 +106,25 @@ h1 {
   align-content: start;
 }
 
+.status-bar {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.56rem 0.66rem;
+  background: rgba(7, 19, 31, 0.75);
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.status-ok {
+  border-color: rgba(99, 211, 140, 0.5);
+  color: #bbf5d0;
+}
+
+.status-bad {
+  border-color: rgba(232, 90, 106, 0.6);
+  color: #ffcad1;
+}
+
 label {
   display: grid;
   gap: 0.35rem;
@@ -218,6 +237,10 @@ table {
 .card-stack {
   display: grid;
   gap: 0.8rem;
+}
+
+.demo-actions {
+  margin-bottom: 0.9rem;
 }
 
 .card {

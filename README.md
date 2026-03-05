@@ -6,6 +6,7 @@ Production-focused Solidity escrow contract for two-player adversarial fights on
 
 ## Table of Contents
 
+- [Contract API Reference](#contract-api-reference)
 - [1. PROJECT OVERVIEW](#1-project-overview)
 - [2. ARCHITECTURE](#2-architecture)
 - [3. TECHNOLOGY STACK](#3-technology-stack)
@@ -26,6 +27,12 @@ Production-focused Solidity escrow contract for two-player adversarial fights on
 - [17. FUTURE EXTENSIONS](#17-future-extensions)
 
 ---
+
+## Contract API Reference
+
+For a full, function-by-function contract deep dive (state, access rules, events, errors, lifecycle transitions, and resolver/owner operations), see:
+
+- [`docs/CONTRACT_REFERENCE.md`](/Users/santisiri/AI/faighters/docs/CONTRACT_REFERENCE.md)
 
 ## 1. PROJECT OVERVIEW
 
@@ -215,6 +222,7 @@ This repository contains one deployable smart contract and supporting test/deplo
 │   └── security/
 │       └── run-security-checks.sh         # Invariants + Slither runner
 ├── docs/
+│   ├── CONTRACT_REFERENCE.md              # Full contract API and behavior reference
 │   ├── DEPLOYMENT_BASE.md                 # Base deployment checklist
 │   └── RESOLVER_WALLET_RUNBOOK.md         # Resolver ops SOP
 ├── foundry.toml                           # Foundry config
@@ -1118,4 +1126,3 @@ cast call "$ESCROW_ADDRESS" "owner()(address)" --rpc-url "$BASE_RPC_URL"
 cast call "$ESCROW_ADDRESS" "resolver()(address)" --rpc-url "$BASE_RPC_URL"
 cast call "$ESCROW_ADDRESS" "paused()(bool)" --rpc-url "$BASE_RPC_URL"
 ```
-

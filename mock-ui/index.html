@@ -36,6 +36,7 @@
           <button id="warpPlus1d" class="btn ghost">+1d</button>
           <button id="resetState" class="btn danger">Reset</button>
         </div>
+        <div id="txStatus" class="status-bar">Ready. Use the controls to simulate contract calls.</div>
       </div>
     </header>
 
@@ -71,6 +72,11 @@
           Use these controls in sequence: create -> join -> resolve/cancel.
           Resolver-only and owner-only checks are enforced.
         </p>
+        <div class="row demo-actions">
+          <button id="demoHappyPath" class="btn ghost">Run Demo: Happy Path</button>
+          <button id="demoSwapRevert" class="btn ghost">Run Demo: Swap Slippage Revert</button>
+          <button id="demoDeadlineRevert" class="btn ghost">Run Demo: Deadline Revert</button>
+        </div>
 
         <div class="card-stack">
           <article class="card">
@@ -258,6 +264,6 @@
       </article>
     </template>
 
-    <script type="module" src="./app.js"></script>
+    <script src="./app.js" defer></script>
   </body>
 </html>

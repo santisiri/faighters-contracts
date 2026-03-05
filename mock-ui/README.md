@@ -14,6 +14,8 @@ Open:
 
 - [http://localhost:8787/mock-ui/](http://localhost:8787/mock-ui/)
 
+You can also open `mock-ui/index.html` directly in a browser for quick demo use.
+
 ## What it simulates
 
 - Role checks: `owner`, `resolver`, player callers

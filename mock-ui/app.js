@@ -24,6 +24,7 @@ const els = {
   warpPlus1h: byId("warpPlus1h"),
   warpPlus1d: byId("warpPlus1d"),
   resetState: byId("resetState"),
+  txStatus: byId("txStatus"),
 
   roleSummary: byId("roleSummary"),
   globalFlags: byId("globalFlags"),
@@ -38,6 +39,9 @@ const els = {
   btnCreateFightWithDeadlines: byId("btnCreateFightWithDeadlines"),
   btnCreateFightFor: byId("btnCreateFightFor"),
   btnCreateFightForWithDeadlines: byId("btnCreateFightForWithDeadlines"),
+  demoHappyPath: byId("demoHappyPath"),
+  demoSwapRevert: byId("demoSwapRevert"),
+  demoDeadlineRevert: byId("demoDeadlineRevert"),
 
   joinFightId: byId("joinFightId"),
   joinPlayerB: byId("joinPlayerB"),
@@ -126,6 +130,7 @@ function seedDemoData() {
   els.resolveFightId.value = "fight-demo-001";
   els.cancelFightId.value = "fight-demo-001";
   emit("Helper", "Demo fields pre-filled. Try: create -> join -> resolve.");
+  setStatus("ok", "Ready. Use create -> join -> resolve, or run a one-click demo.");
   renderAll();
 }
 
@@ -169,9 +174,9 @@ function wireControls() {
 
   els.resetState.addEventListener("click", () => {
     state = bootState();
-    els.activeCaller.value = state.activeCaller;
-    els.nowTs.value = String(state.now);
+    syncUiFromState();
     emit("System", "State reset to defaults.");
+    setStatus("ok", "State reset.");
     renderAll();
   });
 
@@ -298,6 +303,184 @@ function wireControls() {
       emergencyWithdraw(els.withdrawToken.value);
     });
   });
+
+  els.demoHappyPath.addEventListener("click", runHappyPathDemo);
+  els.demoSwapRevert.addEventListener("click", runSwapSlippageDemo);
+  els.demoDeadlineRevert.addEventListener("click", runDeadlineRevertDemo);
+}
+
+function runHappyPathDemo() {
+  state = bootState();
+  const fightId = "demo-happy-sairi";
+  emit("Scenario", "Starting happy-path scenario (SAIRI resolve).");
+  let ok = true;
+
+  ok = attemptStep("createFight by playerA", () => {
+    withCaller(ROLES.playerA, () => {
+      createFight({
+        fightId,
+        token: "SAIRI",
+        stakeAmount: 100,
+        playerA: ROLES.playerA,
+        joinDeadline: 0,
+        resolveDeadline: 0,
+        viaResolver: false,
+      });
+    });
+  });
+
+  ok = attemptStep("joinFight by playerB", () => {
+    withCaller(ROLES.playerB, () => {
+      joinFight({
+        fightId,
+        playerB: ROLES.playerB,
+        viaResolver: false,
+      });
+    });
+  }) && ok;
+
+  ok = attemptStep("resolveFight by resolver", () => {
+    withCaller(ROLES.resolver, () => {
+      resolveFight({
+        fightId,
+        winnerAddress: ROLES.playerA,
+        minSairiOut: 0,
+        simulatedSwapOut: 0,
+      });
+    });
+  }) && ok;
+
+  syncUiFromState();
+  if (ok) {
+    setStatus("ok", "Demo complete: SAIRI happy path succeeded.");
+  } else {
+    setStatus("bad", "Demo failed. Check Event Stream for the failing step.");
+  }
+  renderAll();
+}
+
+function runSwapSlippageDemo() {
+  state = bootState();
+  const fightId = "demo-swap-revert";
+  emit("Scenario", "Starting slippage-revert scenario (USDC resolve).");
+  let ok = true;
+
+  ok = attemptStep("createFight USDC", () => {
+    withCaller(ROLES.playerA, () => {
+      createFight({
+        fightId,
+        token: "USDC",
+        stakeAmount: 100,
+        playerA: ROLES.playerA,
+        joinDeadline: 0,
+        resolveDeadline: 0,
+        viaResolver: false,
+      });
+    });
+  }) && ok;
+
+  ok = attemptStep("joinFight USDC", () => {
+    withCaller(ROLES.playerB, () => {
+      joinFight({
+        fightId,
+        playerB: ROLES.playerB,
+        viaResolver: false,
+      });
+    });
+  }) && ok;
+
+  let reverted = false;
+  ok = attemptStep("resolveFight expects slippage revert", () => {
+    withCaller(ROLES.resolver, () => {
+      try {
+        resolveFight({
+          fightId,
+          winnerAddress: ROLES.playerA,
+          minSairiOut: 200,
+          simulatedSwapOut: 100,
+        });
+      } catch (err) {
+        reverted = true;
+        emit("ExpectedRevert", String(err.message || err));
+      }
+    });
+  }) && ok;
+
+  syncUiFromState();
+  if (reverted && ok) {
+    setStatus("ok", "Demo complete: slippage revert triggered as expected.");
+  } else {
+    setStatus("bad", "Demo warning: expected revert did not trigger.");
+  }
+  renderAll();
+}
+
+function runDeadlineRevertDemo() {
+  state = bootState();
+  const fightId = "demo-deadline-revert";
+  const joinDeadline = state.now + 60;
+  emit("Scenario", "Starting deadline scenario (join after deadline).");
+  let ok = true;
+
+  ok = attemptStep("createFightWithDeadlines", () => {
+    withCaller(ROLES.playerA, () => {
+      createFight({
+        fightId,
+        token: "USDT",
+        stakeAmount: 100,
+        playerA: ROLES.playerA,
+        joinDeadline,
+        resolveDeadline: joinDeadline + 3600,
+        viaResolver: false,
+      });
+    });
+  }) && ok;
+
+  state.now = joinDeadline + 1;
+  let reverted = false;
+  ok = attemptStep("joinFight after deadline expects revert", () => {
+    withCaller(ROLES.playerB, () => {
+      try {
+        joinFight({
+          fightId,
+          playerB: ROLES.playerB,
+          viaResolver: false,
+        });
+      } catch (err) {
+        reverted = true;
+        emit("ExpectedRevert", String(err.message || err));
+      }
+    });
+  }) && ok;
+
+  syncUiFromState();
+  if (reverted && ok) {
+    setStatus("ok", "Demo complete: join deadline revert triggered as expected.");
+  } else {
+    setStatus("bad", "Demo warning: expected deadline revert did not trigger.");
+  }
+  renderAll();
+}
+
+function attemptStep(label, fn) {
+  try {
+    fn();
+    emit("ScenarioStep", `${label}: success`);
+    return true;
+  } catch (err) {
+    emit("ScenarioStep", `${label}: ${String(err.message || err)}`);
+    return false;
+  }
+}
+
+function withCaller(caller, fn) {
+  const previous = state.activeCaller;
+  state.activeCaller = caller;
+  try {
+    fn();
+  } finally {
+    state.activeCaller = previous;
+  }
 }
 
 function createFight({ fightId, token, stakeAmount, playerA, joinDeadline, resolveDeadline, viaResolver }) {
@@ -515,6 +698,7 @@ function txWrap(label, fn) {
       caller: state.activeCaller,
       now: state.now,
     });
+    setStatus("ok", `${label} succeeded as ${state.activeCaller}.`);
   } catch (err) {
     emit("CallRevert", {
       fn: label,
@@ -522,6 +706,7 @@ function txWrap(label, fn) {
       reason: String(err.message || err),
       now: state.now,
     });
+    setStatus("bad", `${label} reverted as ${state.activeCaller}: ${String(err.message || err)}`);
   }
   renderAll();
 }
@@ -536,7 +721,7 @@ function emit(type, payload) {
 }
 
 function renderAll() {
-  els.nowTs.value = String(state.now);
+  syncUiFromState();
   renderRoleSummary();
   renderGlobalFlags();
   renderFightTable();
@@ -724,6 +909,22 @@ function fillSelect(select, values) {
     opt.value = value;
     opt.textContent = value;
     select.appendChild(opt);
+  }
+}
+
+function syncUiFromState() {
+  els.activeCaller.value = state.activeCaller;
+  els.nowTs.value = String(state.now);
+}
+
+function setStatus(kind, text) {
+  els.txStatus.textContent = text;
+  els.txStatus.classList.remove("status-ok", "status-bad");
+  if (kind === "ok") {
+    els.txStatus.classList.add("status-ok");
+  }
+  if (kind === "bad") {
+    els.txStatus.classList.add("status-bad");
   }
 }
 
