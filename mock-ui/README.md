@@ -20,6 +20,7 @@ You can also open `mock-ui/index.html` directly in a browser for quick demo use.
 
 - Role checks: `owner`, `resolver`, player callers
 - Pause/unpause gates
+- Configurable house-cut fee split (`setHouseFeeBps`) for owner/resolver funding
 - Fight creation and joining
 - Optional `joinDeadline` / `resolveDeadline`
 - Resolve flow:

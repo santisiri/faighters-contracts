@@ -35,7 +35,7 @@ Before any state-changing call:
    - `resolved == false`
    - players/winner are expected addresses
    - if deadlines are set, current timestamp has not passed deadline
-3. For non-SAIRI resolves, compute `minSairiOut` from quote/TWAP with 1% slippage buffer.
+3. For non-SAIRI resolves with non-zero burn input, compute `minSairiOut` from quote/TWAP with 1% slippage buffer.
 
 ## 5. Resolver Procedures
 
@@ -125,6 +125,22 @@ cast send "$ESCROW_ADDRESS" \
   --rpc-url "$BASE_RPC_URL"
 ```
 
+### 6.4 House-Cut Fee Split Configuration
+Owner can configure what portion of the 30% house cut is paid to owner/resolver (remaining portion is burned).
+
+- Values are basis points of the house cut (not total pot).
+- Must satisfy: `ownerFeeBps + resolverFeeBps <= 10000`.
+
+Example: 500 / 500 means each gets 5% of house cut.
+
+```bash
+cast send "$ESCROW_ADDRESS" \
+  "setHouseFeeBps(uint256,uint256)" \
+  500 500 \
+  --private-key "$OWNER_PRIVATE_KEY" \
+  --rpc-url "$BASE_RPC_URL"
+```
+
 ## 7. Logging and Audit Requirements
 For each resolver transaction, record:
 - `fightId`
@@ -138,6 +154,6 @@ Retain logs in append-only storage.
 
 ## 8. Operational Safety Rules
 1. Never resolve a fight without a persisted judge decision.
-2. Always set non-zero `minSairiOut` for non-SAIRI resolves.
+2. Set non-zero `minSairiOut` for non-SAIRI resolves when burn input is non-zero.
 3. If swap failures spike, pause new resolutions and investigate pool/fee routing.
 4. If there is any wallet compromise suspicion, rotate resolver immediately and pause if needed.

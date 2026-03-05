@@ -63,6 +63,7 @@ The contract is designed for deterministic, auditable settlement with explicit o
 - Uses OpenZeppelin 5.x primitives:
   - `Ownable`, `Pausable`, `ReentrancyGuard`, `SafeERC20`
 - Optional per-fight join and resolve deadlines.
+- Configurable operational fee split from the house cut (`setHouseFeeBps`) to fund owner/resolver operations (default: 5% / 5% of house cut).
 - Backend-assisted flows (`createFightFor`, `joinFightFor`) for wallet abstraction UX.
 - Liability accounting per token (`reservedTokenBalance`) to keep unresolved fights fully backed.
 - Surplus-only emergency withdrawals.

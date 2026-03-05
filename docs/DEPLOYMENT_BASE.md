@@ -36,6 +36,9 @@ Or set `ESCROW_ADDRESS` in `.env` and run:
    - `cast call "$ESCROW_ADDRESS" "resolver()(address)" --rpc-url "$BASE_RPC_URL"`
 3. Confirm paused state:
    - `cast call "$ESCROW_ADDRESS" "paused()(bool)" --rpc-url "$BASE_RPC_URL"`
+4. Confirm house-cut fee split:
+   - `cast call "$ESCROW_ADDRESS" "ownerFeeBps()(uint256)" --rpc-url "$BASE_RPC_URL"`
+   - `cast call "$ESCROW_ADDRESS" "resolverFeeBps()(uint256)" --rpc-url "$BASE_RPC_URL"`
 
 ## 5. Security Checks
 Run before production cutover:

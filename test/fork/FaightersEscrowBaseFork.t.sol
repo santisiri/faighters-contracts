@@ -63,9 +63,10 @@ contract FaightersEscrowBaseForkTest is Test {
     }
 
     function testFork_SwapRouteFeeAssumption_CheckPools() external view {
-        address configuredPool =
-            IUniswapV3Factory(BASE_UNISWAP_V3_FACTORY).getPool(escrow.USDC(), escrow.SAIRI(), escrow.UNISWAP_POOL_FEE());
-        address onePercentPool = IUniswapV3Factory(BASE_UNISWAP_V3_FACTORY).getPool(escrow.USDC(), escrow.SAIRI(), 10000);
+        address configuredPool = IUniswapV3Factory(BASE_UNISWAP_V3_FACTORY)
+            .getPool(escrow.USDC(), escrow.SAIRI(), escrow.UNISWAP_POOL_FEE());
+        address onePercentPool =
+            IUniswapV3Factory(BASE_UNISWAP_V3_FACTORY).getPool(escrow.USDC(), escrow.SAIRI(), 10000);
 
         // Validates current Base reality against contract assumptions.
         assertEq(configuredPool, address(0), "USDC/SAIRI 0.3% pool unexpectedly exists");
@@ -99,8 +100,13 @@ contract FaightersEscrowBaseForkTest is Test {
         uint256 totalPot = STAKE_SAIRI * 2;
         uint256 winnerPayout = (totalPot * escrow.WINNER_PCT()) / 100;
         uint256 houseCut = totalPot - winnerPayout;
+        uint256 ownerFeeAmount = (houseCut * escrow.ownerFeeBps()) / escrow.BPS_DENOMINATOR();
+        uint256 resolverFeeAmount = (houseCut * escrow.resolverFeeBps()) / escrow.BPS_DENOMINATOR();
+        uint256 burnInputAmount = houseCut - ownerFeeAmount - resolverFeeAmount;
 
         uint256 winnerBefore = sairi.balanceOf(playerA);
+        uint256 ownerBefore = sairi.balanceOf(owner);
+        uint256 resolverBefore = sairi.balanceOf(resolver);
         uint256 burnBefore = sairi.balanceOf(escrow.BURN_ADDRESS());
 
         vm.prank(resolver);
@@ -110,7 +116,9 @@ contract FaightersEscrowBaseForkTest is Test {
         assertTrue(fight.resolved);
         assertEq(fight.winner, playerA);
         assertEq(sairi.balanceOf(playerA), winnerBefore + winnerPayout);
-        assertEq(sairi.balanceOf(escrow.BURN_ADDRESS()), burnBefore + houseCut);
+        assertEq(sairi.balanceOf(owner), ownerBefore + ownerFeeAmount);
+        assertEq(sairi.balanceOf(resolver), resolverBefore + resolverFeeAmount);
+        assertEq(sairi.balanceOf(escrow.BURN_ADDRESS()), burnBefore + burnInputAmount);
         assertEq(escrow.reservedTokenBalance(address(sairi)), 0);
     }
 

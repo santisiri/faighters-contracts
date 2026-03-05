@@ -31,9 +31,19 @@ contract FaightersEscrow is Ownable, Pausable, ReentrancyGuard {
     uint256 public constant WINNER_PCT = 70;
     /// @notice Percent of the pot used as house cut for burn.
     uint256 public constant HOUSE_PCT = 30;
+    /// @notice Basis points denominator for house-cut split configuration.
+    uint256 public constant BPS_DENOMINATOR = 10_000;
+    /// @notice Default owner fee share from house cut, in bps.
+    uint256 public constant DEFAULT_OWNER_FEE_BPS = 500; // 5% of house cut
+    /// @notice Default resolver fee share from house cut, in bps.
+    uint256 public constant DEFAULT_RESOLVER_FEE_BPS = 500; // 5% of house cut
 
     /// @notice Resolver wallet allowed to resolve and house-cancel fights.
     address public resolver;
+    /// @notice Owner fee share from house cut, in bps.
+    uint256 public ownerFeeBps;
+    /// @notice Resolver fee share from house cut, in bps.
+    uint256 public resolverFeeBps;
     /// @notice Total amount currently reserved for unresolved fights, by token.
     mapping(address => uint256) public reservedTokenBalance;
 
@@ -68,14 +78,28 @@ contract FaightersEscrow is Ownable, Pausable, ReentrancyGuard {
     error ZeroAddress();
     error MinSairiOutRequired();
     error InvalidPercentConfig();
+    error InvalidHouseFeeSplit();
     error NoSurplusAvailable(address token);
     error InvalidDeadlineWindow();
     error JoinDeadlinePassed(bytes32 fightId, uint256 joinDeadline);
     error ResolveDeadlinePassed(bytes32 fightId, uint256 resolveDeadline);
 
     event ResolverUpdated(address indexed previousResolver, address indexed newResolver);
+    event HouseFeeConfigUpdated(
+        uint256 indexed previousOwnerFeeBps,
+        uint256 indexed previousResolverFeeBps,
+        uint256 newOwnerFeeBps,
+        uint256 newResolverFeeBps
+    );
     event FightCreated(bytes32 indexed fightId, address indexed playerA, address indexed token, uint256 stakeAmount);
     event FightJoined(bytes32 indexed fightId, address indexed playerB);
+    event HouseFeesDistributed(
+        bytes32 indexed fightId,
+        address indexed tokenUsed,
+        uint256 ownerFeeAmount,
+        uint256 resolverFeeAmount,
+        uint256 burnInputAmount
+    );
     event FightResolved(
         bytes32 indexed fightId,
         address indexed winner,
@@ -105,6 +129,11 @@ contract FaightersEscrow is Ownable, Pausable, ReentrancyGuard {
             revert InvalidPercentConfig();
         }
         resolver = resolver_;
+        ownerFeeBps = DEFAULT_OWNER_FEE_BPS;
+        resolverFeeBps = DEFAULT_RESOLVER_FEE_BPS;
+        if (ownerFeeBps + resolverFeeBps > BPS_DENOMINATOR) {
+            revert InvalidHouseFeeSplit();
+        }
     }
 
     /// @notice Updates the resolver wallet.
@@ -116,6 +145,21 @@ contract FaightersEscrow is Ownable, Pausable, ReentrancyGuard {
         address oldResolver = resolver;
         resolver = newResolver;
         emit ResolverUpdated(oldResolver, newResolver);
+    }
+
+    /// @notice Updates owner/resolver fee split from the house cut.
+    /// @dev Fee values are in basis points of the house cut (not total pot), and must sum to <= 10_000.
+    /// @param newOwnerFeeBps Owner fee share from house cut in basis points.
+    /// @param newResolverFeeBps Resolver fee share from house cut in basis points.
+    function setHouseFeeBps(uint256 newOwnerFeeBps, uint256 newResolverFeeBps) external onlyOwner {
+        if (newOwnerFeeBps + newResolverFeeBps > BPS_DENOMINATOR) {
+            revert InvalidHouseFeeSplit();
+        }
+        uint256 oldOwnerFeeBps = ownerFeeBps;
+        uint256 oldResolverFeeBps = resolverFeeBps;
+        ownerFeeBps = newOwnerFeeBps;
+        resolverFeeBps = newResolverFeeBps;
+        emit HouseFeeConfigUpdated(oldOwnerFeeBps, oldResolverFeeBps, newOwnerFeeBps, newResolverFeeBps);
     }
 
     /// @notice Pauses fight lifecycle operations.
@@ -398,6 +442,9 @@ contract FaightersEscrow is Ownable, Pausable, ReentrancyGuard {
         uint256 totalPot = fight.stakeAmount * 2;
         uint256 winnerPayout = (totalPot * WINNER_PCT) / 100;
         uint256 houseCut = totalPot - winnerPayout;
+        uint256 ownerFeeAmount = (houseCut * ownerFeeBps) / BPS_DENOMINATOR;
+        uint256 resolverFeeAmount = (houseCut * resolverFeeBps) / BPS_DENOMINATOR;
+        uint256 burnInputAmount = houseCut - ownerFeeAmount - resolverFeeAmount;
 
         reservedTokenBalance[fight.tokenUsed] -= totalPot;
         fight.resolved = true;
@@ -405,31 +452,45 @@ contract FaightersEscrow is Ownable, Pausable, ReentrancyGuard {
 
         IERC20 token = IERC20(fight.tokenUsed);
         token.safeTransfer(winnerAddress, winnerPayout);
+        if (ownerFeeAmount != 0) {
+            token.safeTransfer(owner(), ownerFeeAmount);
+        }
+        if (resolverFeeAmount != 0) {
+            token.safeTransfer(resolver, resolverFeeAmount);
+        }
+
+        emit HouseFeesDistributed(fightId, fight.tokenUsed, ownerFeeAmount, resolverFeeAmount, burnInputAmount);
 
         uint256 sairiBurned;
         if (fight.tokenUsed == SAIRI) {
-            sairiBurned = houseCut;
-            token.safeTransfer(BURN_ADDRESS, houseCut);
-        } else {
-            if (minSairiOut == 0) {
-                revert MinSairiOutRequired();
+            sairiBurned = burnInputAmount;
+            if (burnInputAmount != 0) {
+                token.safeTransfer(BURN_ADDRESS, burnInputAmount);
             }
+        } else {
+            if (burnInputAmount == 0) {
+                sairiBurned = 0;
+            } else {
+                if (minSairiOut == 0) {
+                    revert MinSairiOutRequired();
+                }
 
-            token.forceApprove(SWAP_ROUTER, houseCut);
+                token.forceApprove(SWAP_ROUTER, burnInputAmount);
 
-            ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
-                tokenIn: fight.tokenUsed,
-                tokenOut: SAIRI,
-                fee: UNISWAP_POOL_FEE,
-                recipient: address(this),
-                deadline: block.timestamp,
-                amountIn: houseCut,
-                amountOutMinimum: minSairiOut,
-                sqrtPriceLimitX96: 0
-            });
+                ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
+                    tokenIn: fight.tokenUsed,
+                    tokenOut: SAIRI,
+                    fee: UNISWAP_POOL_FEE,
+                    recipient: address(this),
+                    deadline: block.timestamp,
+                    amountIn: burnInputAmount,
+                    amountOutMinimum: minSairiOut,
+                    sqrtPriceLimitX96: 0
+                });
 
-            sairiBurned = ISwapRouter(SWAP_ROUTER).exactInputSingle(params);
-            IERC20(SAIRI).safeTransfer(BURN_ADDRESS, sairiBurned);
+                sairiBurned = ISwapRouter(SWAP_ROUTER).exactInputSingle(params);
+                IERC20(SAIRI).safeTransfer(BURN_ADDRESS, sairiBurned);
+            }
         }
 
         emit FightResolved(fightId, winnerAddress, fight.tokenUsed, winnerPayout, houseCut, sairiBurned);

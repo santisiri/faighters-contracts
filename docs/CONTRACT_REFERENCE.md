@@ -45,12 +45,23 @@ Other constants:
 - `UNISWAP_POOL_FEE = 3000` (0.3%)
 - `WINNER_PCT = 70`
 - `HOUSE_PCT = 30`
+- `BPS_DENOMINATOR = 10000`
+- `DEFAULT_OWNER_FEE_BPS = 500`
+- `DEFAULT_RESOLVER_FEE_BPS = 500`
+
+Default house-cut split at deployment:
+
+- Owner receives 5% of house cut
+- Resolver receives 5% of house cut
+- Remaining 90% of house cut goes to burn path
 
 ## 3) Storage Layout
 
 ### 3.1 Global storage
 
 - `address public resolver`
+- `uint256 public ownerFeeBps`
+- `uint256 public resolverFeeBps`
 - `mapping(address => uint256) public reservedTokenBalance`
 - `mapping(bytes32 => Fight) public fights`
 
@@ -125,6 +136,7 @@ Invariant target:
 ## 6) Access Control Matrix
 
 - `setResolver`: owner only
+- `setHouseFeeBps`: owner only
 - `pause`, `unpause`: owner only
 - `createFight`: any caller (as playerA)
 - `createFightWithDeadlines`: any caller (as playerA)
@@ -139,7 +151,7 @@ Invariant target:
 Pause behavior:
 
 - `create*`, `join*`, `resolve*`, and `cancelFight` are blocked while paused.
-- Admin calls (`setResolver`, `pause`, `unpause`, `emergencyWithdraw`) are not pause-gated.
+- Admin calls (`setResolver`, `setHouseFeeBps`, `pause`, `unpause`, `emergencyWithdraw`) are not pause-gated.
 
 ## 7) Function-by-Function Reference
 
@@ -159,7 +171,25 @@ Checks:
 Effects:
 
 - Stores resolver.
+- Sets default `ownerFeeBps` / `resolverFeeBps`.
 - Sets owner via `Ownable(owner_)`.
+
+#### `setHouseFeeBps(uint256 newOwnerFeeBps, uint256 newResolverFeeBps)`
+
+Access:
+
+- `onlyOwner`
+
+Checks:
+
+- `newOwnerFeeBps + newResolverFeeBps <= 10_000`, else `InvalidHouseFeeSplit`.
+
+Effects:
+
+- Updates fee split used on each resolve:
+  - owner share from house cut
+  - resolver share from house cut
+- Emits `HouseFeeConfigUpdated(previousOwnerFeeBps, previousResolverFeeBps, newOwnerFeeBps, newResolverFeeBps)`.
 
 ### 7.2 Admin functions
 
@@ -330,7 +360,7 @@ Access:
 Usage:
 
 - Intended for SAIRI fights.
-- For non-SAIRI fights, this path reverts (`MinSairiOutRequired`) because `minSairiOut` resolves to 0.
+- For non-SAIRI fights, this path generally reverts (`MinSairiOutRequired`) unless configured fees leave zero burn input.
 
 Flow:
 
@@ -365,6 +395,9 @@ Settlement math:
 - `totalPot = stakeAmount * 2`
 - `winnerPayout = totalPot * 70 / 100`
 - `houseCut = totalPot - winnerPayout`
+- `ownerFeeAmount = houseCut * ownerFeeBps / 10000`
+- `resolverFeeAmount = houseCut * resolverFeeBps / 10000`
+- `burnInputAmount = houseCut - ownerFeeAmount - resolverFeeAmount`
 
 Pre-transfer state update:
 
@@ -375,23 +408,25 @@ Pre-transfer state update:
 Winner payout:
 
 - `token.safeTransfer(winnerAddress, winnerPayout)`
+- If non-zero, transfers owner and resolver fee amounts in `tokenUsed`.
 
 House cut handling:
 
 1. SAIRI fights:
-   - `sairiBurned = houseCut`
-   - `token.safeTransfer(BURN_ADDRESS, houseCut)`
+   - `sairiBurned = burnInputAmount`
+   - burns `burnInputAmount` directly in SAIRI.
 
 2. Non-SAIRI fights:
-   - requires `minSairiOut != 0`, else `MinSairiOutRequired`
-   - `token.forceApprove(SWAP_ROUTER, houseCut)`
+   - if `burnInputAmount == 0`, no swap, `sairiBurned = 0`
+   - else requires `minSairiOut != 0`, or `MinSairiOutRequired`
+   - `token.forceApprove(SWAP_ROUTER, burnInputAmount)`
    - calls `exactInputSingle` with:
      - `tokenIn = fight.tokenUsed`
      - `tokenOut = SAIRI`
      - `fee = UNISWAP_POOL_FEE`
      - `recipient = address(this)`
      - `deadline = block.timestamp`
-     - `amountIn = houseCut`
+     - `amountIn = burnInputAmount`
      - `amountOutMinimum = minSairiOut`
      - `sqrtPriceLimitX96 = 0`
    - receives `sairiBurned`
@@ -399,6 +434,7 @@ House cut handling:
 
 Event:
 
+- `HouseFeesDistributed(fightId, tokenUsed, ownerFeeAmount, resolverFeeAmount, burnInputAmount)`
 - `FightResolved(fightId, winner, tokenUsed, winnerPayout, houseCutInput, sairiBurned)`
 
 Atomicity note:
@@ -494,8 +530,10 @@ Meaning:
 ## 9) Events
 
 - `ResolverUpdated(previousResolver, newResolver)`
+- `HouseFeeConfigUpdated(previousOwnerFeeBps, previousResolverFeeBps, newOwnerFeeBps, newResolverFeeBps)`
 - `FightCreated(fightId, playerA, token, stakeAmount)`
 - `FightJoined(fightId, playerB)`
+- `HouseFeesDistributed(fightId, tokenUsed, ownerFeeAmount, resolverFeeAmount, burnInputAmount)`
 - `FightResolved(fightId, winner, tokenUsed, winnerPayout, houseCutInput, sairiBurned)`
 - `FightCancelled(fightId, cancelledBy)`
 - `EmergencyWithdraw(token, to, amount)`
@@ -522,6 +560,7 @@ Operational guidance:
 - `ZeroAddress()`
 - `MinSairiOutRequired()`
 - `InvalidPercentConfig()`
+- `InvalidHouseFeeSplit()`
 - `NoSurplusAvailable(address token)`
 - `InvalidDeadlineWindow()`
 - `JoinDeadlinePassed(bytes32 fightId, uint256 joinDeadline)`
@@ -537,7 +576,8 @@ Operational guidance:
 ### 11.2 Choosing the right resolve method
 
 - If `tokenUsed == SAIRI`, either resolve overload can work.
-- If `tokenUsed != SAIRI`, use `resolveFight(fightId, winner, minSairiOut)` with non-zero `minSairiOut`.
+- If `tokenUsed != SAIRI` and burn input is non-zero, use `resolveFight(fightId, winner, minSairiOut)` with non-zero `minSairiOut`.
+- If burn input is zero (100% of house cut allocated to owner/resolver fees), either overload works because swap is skipped.
 
 ### 11.3 Recommended resolver preflight
 

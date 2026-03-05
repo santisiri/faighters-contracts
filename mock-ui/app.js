@@ -1,6 +1,7 @@
 const TOKENS = ["WETH", "USDC", "USDT", "SAIRI"];
 const WINNER_PCT = 70;
 const HOUSE_PCT = 30;
+const BPS_DENOMINATOR = 10000;
 const BURN_ADDRESS = "0x000000000000000000000000000000000000dEaD";
 
 const ROLES = {
@@ -58,10 +59,13 @@ const els = {
   cancelFightId: byId("cancelFightId"),
   newResolver: byId("newResolver"),
   withdrawToken: byId("withdrawToken"),
+  ownerFeeBps: byId("ownerFeeBps"),
+  resolverFeeBps: byId("resolverFeeBps"),
   btnPause: byId("btnPause"),
   btnUnpause: byId("btnUnpause"),
   btnCancelFight: byId("btnCancelFight"),
   btnSetResolver: byId("btnSetResolver"),
+  btnSetHouseFeeBps: byId("btnSetHouseFeeBps"),
   btnEmergencyWithdraw: byId("btnEmergencyWithdraw"),
 
   fightTableBody: document.querySelector("#fightTable tbody"),
@@ -111,6 +115,8 @@ function bootState() {
     activeCaller: ROLES.playerA,
     owner: ROLES.owner,
     resolver: ROLES.resolver,
+    ownerFeeBps: 500,
+    resolverFeeBps: 500,
     paused: false,
     fights: {},
     reserved: {
@@ -295,6 +301,12 @@ function wireControls() {
   els.btnSetResolver.addEventListener("click", () => {
     txWrap("setResolver", () => {
       setResolver(els.newResolver.value);
+    });
+  });
+
+  els.btnSetHouseFeeBps.addEventListener("click", () => {
+    txWrap("setHouseFeeBps", () => {
+      setHouseFeeBps(toInt(els.ownerFeeBps.value), toInt(els.resolverFeeBps.value));
     });
   });
 
@@ -555,10 +567,13 @@ function resolveFight({ fightId, winnerAddress, minSairiOut, simulatedSwapOut })
   const totalPot = fight.stakeAmount * 2;
   const winnerPayout = Math.floor((totalPot * WINNER_PCT) / 100);
   const houseCut = totalPot - winnerPayout;
+  const ownerFeeAmount = Math.floor((houseCut * state.ownerFeeBps) / BPS_DENOMINATOR);
+  const resolverFeeAmount = Math.floor((houseCut * state.resolverFeeBps) / BPS_DENOMINATOR);
+  const burnInputAmount = houseCut - ownerFeeAmount - resolverFeeAmount;
 
   if (fight.tokenUsed !== "SAIRI") {
-    if (minSairiOut === 0) revert("MinSairiOutRequired");
-    if (simulatedSwapOut < minSairiOut) revert("Swap slippage (simulated)");
+    if (burnInputAmount > 0 && minSairiOut === 0) revert("MinSairiOutRequired");
+    if (burnInputAmount > 0 && simulatedSwapOut < minSairiOut) revert("Swap slippage (simulated)");
   }
 
   state.reserved[fight.tokenUsed] -= totalPot;
@@ -566,18 +581,28 @@ function resolveFight({ fightId, winnerAddress, minSairiOut, simulatedSwapOut })
   fight.winner = winnerAddress;
 
   transfer("escrow", winnerAddress, fight.tokenUsed, winnerPayout);
+  if (ownerFeeAmount > 0) {
+    transfer("escrow", state.owner, fight.tokenUsed, ownerFeeAmount);
+  }
+  if (resolverFeeAmount > 0) {
+    transfer("escrow", state.resolver, fight.tokenUsed, resolverFeeAmount);
+  }
 
   let sairiBurned = 0;
   if (fight.tokenUsed === "SAIRI") {
-    sairiBurned = houseCut;
-    transfer("escrow", BURN_ADDRESS, "SAIRI", houseCut);
+    sairiBurned = burnInputAmount;
+    if (burnInputAmount > 0) {
+      transfer("escrow", BURN_ADDRESS, "SAIRI", burnInputAmount);
+    }
   } else {
-    transfer("escrow", "router", fight.tokenUsed, houseCut);
-    // In production this comes from pool liquidity through SwapRouter.
-    // In this mock UI we mint swap output directly into escrow for clarity.
-    state.balances.escrow.SAIRI += simulatedSwapOut;
-    transfer("escrow", BURN_ADDRESS, "SAIRI", simulatedSwapOut);
-    sairiBurned = simulatedSwapOut;
+    if (burnInputAmount > 0) {
+      transfer("escrow", "router", fight.tokenUsed, burnInputAmount);
+      // In production this comes from pool liquidity through SwapRouter.
+      // In this mock UI we mint swap output directly into escrow for clarity.
+      state.balances.escrow.SAIRI += simulatedSwapOut;
+      transfer("escrow", BURN_ADDRESS, "SAIRI", simulatedSwapOut);
+      sairiBurned = simulatedSwapOut;
+    }
   }
 
   emit("FightResolved", {
@@ -586,6 +611,9 @@ function resolveFight({ fightId, winnerAddress, minSairiOut, simulatedSwapOut })
     tokenUsed: fight.tokenUsed,
     winnerPayout,
     houseCutInput: houseCut,
+    ownerFeeAmount,
+    resolverFeeAmount,
+    burnInputAmount,
     sairiBurned,
   });
 }
@@ -636,6 +664,23 @@ function setResolver(newResolver) {
   const previousResolver = state.resolver;
   state.resolver = newResolver;
   emit("ResolverUpdated", { previousResolver, newResolver });
+}
+
+function setHouseFeeBps(newOwnerFeeBps, newResolverFeeBps) {
+  onlyOwner();
+  if (newOwnerFeeBps + newResolverFeeBps > BPS_DENOMINATOR) {
+    revert("InvalidHouseFeeSplit");
+  }
+  const prevOwnerFeeBps = state.ownerFeeBps;
+  const prevResolverFeeBps = state.resolverFeeBps;
+  state.ownerFeeBps = newOwnerFeeBps;
+  state.resolverFeeBps = newResolverFeeBps;
+  emit("HouseFeeConfigUpdated", {
+    prevOwnerFeeBps,
+    prevResolverFeeBps,
+    newOwnerFeeBps,
+    newResolverFeeBps,
+  });
 }
 
 function emergencyWithdraw(token) {
@@ -750,6 +795,9 @@ function renderGlobalFlags() {
     ["paused", state.paused ? "true" : "false"],
     ["winner pct", `${WINNER_PCT}%`],
     ["house pct", `${HOUSE_PCT}%`],
+    ["owner fee bps", String(state.ownerFeeBps)],
+    ["resolver fee bps", String(state.resolverFeeBps)],
+    ["burn bps (of house)", String(BPS_DENOMINATOR - state.ownerFeeBps - state.resolverFeeBps)],
     ["pool fee", "3000 (0.3%)"],
   ];
   for (const [k, v] of rows) {
@@ -848,6 +896,11 @@ function renderInvariantWatch() {
 function computeInvariantChecks() {
   const checks = [];
 
+  checks.push({
+    ok: state.ownerFeeBps + state.resolverFeeBps <= BPS_DENOMINATOR,
+    message: `house fee split valid (${state.ownerFeeBps} + ${state.resolverFeeBps} <= ${BPS_DENOMINATOR})`,
+  });
+
   for (const token of TOKENS) {
     const balance = state.balances.escrow[token];
     const reserved = state.reserved[token];
@@ -915,6 +968,8 @@ function fillSelect(select, values) {
 function syncUiFromState() {
   els.activeCaller.value = state.activeCaller;
   els.nowTs.value = String(state.now);
+  els.ownerFeeBps.value = String(state.ownerFeeBps);
+  els.resolverFeeBps.value = String(state.resolverFeeBps);
 }
 
 function setStatus(kind, text) {

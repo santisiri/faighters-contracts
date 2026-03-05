@@ -12,8 +12,21 @@ import {MockSwapRouter} from "./mocks/MockSwapRouter.sol";
 
 contract FaightersEscrowTest is Test {
     event ResolverUpdated(address indexed previousResolver, address indexed newResolver);
+    event HouseFeeConfigUpdated(
+        uint256 indexed previousOwnerFeeBps,
+        uint256 indexed previousResolverFeeBps,
+        uint256 newOwnerFeeBps,
+        uint256 newResolverFeeBps
+    );
     event FightCreated(bytes32 indexed fightId, address indexed playerA, address indexed token, uint256 stakeAmount);
     event FightJoined(bytes32 indexed fightId, address indexed playerB);
+    event HouseFeesDistributed(
+        bytes32 indexed fightId,
+        address indexed tokenUsed,
+        uint256 ownerFeeAmount,
+        uint256 resolverFeeAmount,
+        uint256 burnInputAmount
+    );
     event FightResolved(
         bytes32 indexed fightId,
         address indexed winner,
@@ -43,6 +56,7 @@ contract FaightersEscrowTest is Test {
     uint256 internal constant STAKE_6 = 100e6;
     uint256 internal constant START_18 = 1_000 ether;
     uint256 internal constant START_6 = 10_000e6;
+    uint256 internal constant BPS_DENOMINATOR = 10_000;
 
     function setUp() external {
         owner = makeAddr("owner");
@@ -76,6 +90,11 @@ contract FaightersEscrowTest is Test {
         assertEq(escrow.resolver(), resolver);
     }
 
+    function testConstructorSetsDefaultHouseFeeBps() external view {
+        assertEq(escrow.ownerFeeBps(), escrow.DEFAULT_OWNER_FEE_BPS());
+        assertEq(escrow.resolverFeeBps(), escrow.DEFAULT_RESOLVER_FEE_BPS());
+    }
+
     function testConstructorRevertsOnZeroResolver() external {
         vm.expectRevert(FaightersEscrow.ZeroAddress.selector);
         new FaightersEscrow(address(0), owner);
@@ -103,6 +122,34 @@ contract FaightersEscrowTest is Test {
         vm.expectRevert(FaightersEscrow.ZeroAddress.selector);
         vm.prank(owner);
         escrow.setResolver(address(0));
+    }
+
+    function testSetHouseFeeBpsByOwner() external {
+        uint256 newOwnerFeeBps = 750;
+        uint256 newResolverFeeBps = 1250;
+
+        vm.expectEmit(true, true, true, true, address(escrow));
+        emit HouseFeeConfigUpdated(
+            escrow.DEFAULT_OWNER_FEE_BPS(), escrow.DEFAULT_RESOLVER_FEE_BPS(), newOwnerFeeBps, newResolverFeeBps
+        );
+
+        vm.prank(owner);
+        escrow.setHouseFeeBps(newOwnerFeeBps, newResolverFeeBps);
+
+        assertEq(escrow.ownerFeeBps(), newOwnerFeeBps);
+        assertEq(escrow.resolverFeeBps(), newResolverFeeBps);
+    }
+
+    function testSetHouseFeeBpsRevertsForNonOwner() external {
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, attacker));
+        vm.prank(attacker);
+        escrow.setHouseFeeBps(100, 100);
+    }
+
+    function testSetHouseFeeBpsRevertsWhenInvalidSplit() external {
+        vm.expectRevert(FaightersEscrow.InvalidHouseFeeSplit.selector);
+        vm.prank(owner);
+        escrow.setHouseFeeBps(BPS_DENOMINATOR, 1);
     }
 
     function testPauseAndUnpauseByOwner() external {
@@ -243,9 +290,7 @@ contract FaightersEscrowTest is Test {
 
         _approveToken(address(usdc), playerA, STAKE_6);
         vm.prank(resolver);
-        escrow.createFightForWithDeadlines(
-            fightId, address(usdc), STAKE_6, playerA, joinDeadline, resolveDeadline
-        );
+        escrow.createFightForWithDeadlines(fightId, address(usdc), STAKE_6, playerA, joinDeadline, resolveDeadline);
 
         FaightersEscrow.Fight memory fight = escrow.getFight(fightId);
         assertEq(fight.playerA, playerA);
@@ -485,17 +530,27 @@ contract FaightersEscrowTest is Test {
         uint256 totalPot = STAKE_18 * 2;
         uint256 winnerPayout = (totalPot * escrow.WINNER_PCT()) / 100;
         uint256 houseCut = totalPot - winnerPayout;
+        uint256 ownerFeeAmount = _ownerFee(houseCut);
+        uint256 resolverFeeAmount = _resolverFee(houseCut);
+        uint256 burnInputAmount = houseCut - ownerFeeAmount - resolverFeeAmount;
         uint256 winnerBefore = sairi.balanceOf(playerA);
         uint256 burnBefore = sairi.balanceOf(escrow.BURN_ADDRESS());
+        uint256 ownerBefore = sairi.balanceOf(owner);
+        uint256 resolverBefore = sairi.balanceOf(resolver);
+
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit HouseFeesDistributed(fightId, address(sairi), ownerFeeAmount, resolverFeeAmount, burnInputAmount);
 
         vm.expectEmit(true, true, true, true, address(escrow));
-        emit FightResolved(fightId, playerA, address(sairi), winnerPayout, houseCut, houseCut);
+        emit FightResolved(fightId, playerA, address(sairi), winnerPayout, houseCut, burnInputAmount);
 
         vm.prank(resolver);
         escrow.resolveFight(fightId, playerA);
 
         assertEq(sairi.balanceOf(playerA), winnerBefore + winnerPayout);
-        assertEq(sairi.balanceOf(escrow.BURN_ADDRESS()), burnBefore + houseCut);
+        assertEq(sairi.balanceOf(escrow.BURN_ADDRESS()), burnBefore + burnInputAmount);
+        assertEq(sairi.balanceOf(owner), ownerBefore + ownerFeeAmount);
+        assertEq(sairi.balanceOf(resolver), resolverBefore + resolverFeeAmount);
         assertEq(sairi.balanceOf(address(escrow)), 0);
         assertEq(escrow.reservedTokenBalance(address(sairi)), 0);
 
@@ -637,14 +692,22 @@ contract FaightersEscrowTest is Test {
         uint256 totalPot = STAKE_6 * 2;
         uint256 winnerPayout = (totalPot * escrow.WINNER_PCT()) / 100;
         uint256 houseCut = totalPot - winnerPayout;
+        uint256 ownerFeeAmount = _ownerFee(houseCut);
+        uint256 resolverFeeAmount = _resolverFee(houseCut);
+        uint256 burnInputAmount = houseCut - ownerFeeAmount - resolverFeeAmount;
         uint256 expectedSairiOut = 50 ether;
         uint256 minSairiOut = (expectedSairiOut * 99) / 100;
         uint256 winnerBefore = usdc.balanceOf(playerB);
+        uint256 ownerBefore = usdc.balanceOf(owner);
+        uint256 resolverBefore = usdc.balanceOf(resolver);
         uint256 burnBefore = sairi.balanceOf(escrow.BURN_ADDRESS());
         uint256 ts = block.timestamp;
 
         router.setAmountOut(expectedSairiOut);
         sairi.mint(address(router), expectedSairiOut);
+
+        vm.expectEmit(true, true, false, true, address(escrow));
+        emit HouseFeesDistributed(fightId, address(usdc), ownerFeeAmount, resolverFeeAmount, burnInputAmount);
 
         vm.expectEmit(true, true, true, true, address(escrow));
         emit FightResolved(fightId, playerB, address(usdc), winnerPayout, houseCut, expectedSairiOut);
@@ -653,7 +716,9 @@ contract FaightersEscrowTest is Test {
         escrow.resolveFight(fightId, playerB, minSairiOut);
 
         assertEq(usdc.balanceOf(playerB), winnerBefore + winnerPayout);
-        assertEq(usdc.balanceOf(address(router)), houseCut);
+        assertEq(usdc.balanceOf(owner), ownerBefore + ownerFeeAmount);
+        assertEq(usdc.balanceOf(resolver), resolverBefore + resolverFeeAmount);
+        assertEq(usdc.balanceOf(address(router)), burnInputAmount);
         assertEq(sairi.balanceOf(escrow.BURN_ADDRESS()), burnBefore + expectedSairiOut);
         assertEq(usdc.balanceOf(address(escrow)), 0);
         assertEq(escrow.reservedTokenBalance(address(usdc)), 0);
@@ -663,7 +728,7 @@ contract FaightersEscrowTest is Test {
         assertEq(router.lastRecipient(), address(escrow));
         assertEq(router.lastFee(), escrow.UNISWAP_POOL_FEE());
         assertEq(router.lastDeadline(), ts);
-        assertEq(router.lastAmountIn(), houseCut);
+        assertEq(router.lastAmountIn(), burnInputAmount);
         assertEq(router.lastAmountOutMinimum(), minSairiOut);
         assertEq(router.lastSqrtPriceLimitX96(), 0);
     }
@@ -675,6 +740,31 @@ contract FaightersEscrowTest is Test {
         vm.expectRevert(FaightersEscrow.MinSairiOutRequired.selector);
         vm.prank(resolver);
         escrow.resolveFight(fightId, playerA, 0);
+    }
+
+    function testResolveFightSwapPathSkipsSwapWhenNoBurnInput() external {
+        bytes32 fightId = _fightId("resolve-usdc-no-burn");
+        _createAndJoin(fightId, address(usdc), STAKE_6);
+
+        vm.prank(owner);
+        escrow.setHouseFeeBps(5_000, 5_000);
+
+        uint256 totalPot = STAKE_6 * 2;
+        uint256 winnerPayout = (totalPot * escrow.WINNER_PCT()) / 100;
+        uint256 houseCut = totalPot - winnerPayout;
+        uint256 ownerBefore = usdc.balanceOf(owner);
+        uint256 resolverBefore = usdc.balanceOf(resolver);
+        uint256 burnBefore = sairi.balanceOf(escrow.BURN_ADDRESS());
+        uint256 routerBefore = usdc.balanceOf(address(router));
+
+        vm.prank(resolver);
+        escrow.resolveFight(fightId, playerA);
+
+        assertEq(usdc.balanceOf(owner), ownerBefore + (houseCut / 2));
+        assertEq(usdc.balanceOf(resolver), resolverBefore + (houseCut / 2));
+        assertEq(usdc.balanceOf(address(router)), routerBefore);
+        assertEq(sairi.balanceOf(escrow.BURN_ADDRESS()), burnBefore);
+        assertEq(escrow.reservedTokenBalance(address(usdc)), 0);
     }
 
     function testResolveFightTwoArgRevertsForNonSairiFight() external {
@@ -895,16 +985,28 @@ contract FaightersEscrowTest is Test {
         uint256 totalPot = stake * 2;
         uint256 winnerBefore = sairi.balanceOf(playerA);
         uint256 burnBefore = sairi.balanceOf(escrow.BURN_ADDRESS());
+        uint256 ownerBefore = sairi.balanceOf(owner);
+        uint256 resolverBefore = sairi.balanceOf(resolver);
 
         vm.prank(resolver);
         escrow.resolveFight(fightId, playerA);
 
         uint256 winnerDelta = sairi.balanceOf(playerA) - winnerBefore;
         uint256 burnDelta = sairi.balanceOf(escrow.BURN_ADDRESS()) - burnBefore;
+        uint256 ownerDelta = sairi.balanceOf(owner) - ownerBefore;
+        uint256 resolverDelta = sairi.balanceOf(resolver) - resolverBefore;
 
-        assertEq(winnerDelta + burnDelta, totalPot);
+        assertEq(winnerDelta + burnDelta + ownerDelta + resolverDelta, totalPot);
         assertEq(sairi.balanceOf(address(escrow)), 0);
         assertEq(escrow.reservedTokenBalance(address(sairi)), 0);
+    }
+
+    function _ownerFee(uint256 houseCut) internal view returns (uint256) {
+        return (houseCut * escrow.ownerFeeBps()) / BPS_DENOMINATOR;
+    }
+
+    function _resolverFee(uint256 houseCut) internal view returns (uint256) {
+        return (houseCut * escrow.resolverFeeBps()) / BPS_DENOMINATOR;
     }
 
     function _createOnly(bytes32 fightId, address token, uint256 stake) internal {

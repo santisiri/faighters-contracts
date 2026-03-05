@@ -151,6 +151,12 @@
               <label>withdraw token
                 <select id="withdrawToken"></select>
               </label>
+              <label>ownerFeeBps
+                <input id="ownerFeeBps" type="number" min="0" max="10000" value="500" />
+              </label>
+              <label>resolverFeeBps
+                <input id="resolverFeeBps" type="number" min="0" max="10000" value="500" />
+              </label>
               <div class="inline-actions">
                 <button id="btnPause" class="btn ghost">pause()</button>
                 <button id="btnUnpause" class="btn ghost">unpause()</button>
@@ -159,6 +165,7 @@
             <div class="row">
               <button id="btnCancelFight" class="btn">cancelFight</button>
               <button id="btnSetResolver" class="btn ghost">setResolver</button>
+              <button id="btnSetHouseFeeBps" class="btn ghost">setHouseFeeBps</button>
               <button id="btnEmergencyWithdraw" class="btn danger">emergencyWithdraw</button>
             </div>
           </article>
@@ -221,6 +228,7 @@
               <li><span>resolveFight*</span><strong>resolver only</strong></li>
               <li><span>cancelFight</span><strong>resolver or playerA pre-join</strong></li>
               <li><span>setResolver/pause/unpause</span><strong>owner only</strong></li>
+              <li><span>setHouseFeeBps</span><strong>owner only; sum <= 10000</strong></li>
               <li><span>emergencyWithdraw</span><strong>owner only + surplus only</strong></li>
             </ul>
             <p class="hint">*Resolver variants are <code>createFightFor*</code> and <code>joinFightFor</code>.</p>
