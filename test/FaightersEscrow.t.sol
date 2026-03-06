@@ -840,6 +840,35 @@ contract FaightersEscrowTest is Test {
         assertEq(ownerFeeAmount + resolverFeeAmount + burnInputAmount, houseCut);
     }
 
+    function testOperatorRevenueAccumulatesAcross100ResolvedFights() external {
+        uint256 fightCount = 100;
+        uint256 stake = 1 ether;
+        uint256 totalPot = stake * 2;
+        uint256 winnerPayout = (totalPot * escrow.WINNER_PCT()) / 100;
+        uint256 houseCut = totalPot - winnerPayout;
+        uint256 ownerFeePerFight = _ownerFee(houseCut);
+        uint256 resolverFeePerFight = _resolverFee(houseCut);
+        uint256 burnInputPerFight = houseCut - ownerFeePerFight - resolverFeePerFight;
+
+        uint256 ownerBefore = sairi.balanceOf(owner);
+        uint256 resolverBefore = sairi.balanceOf(resolver);
+        uint256 burnBefore = sairi.balanceOf(escrow.BURN_ADDRESS());
+
+        for (uint256 i = 0; i < fightCount; i++) {
+            bytes32 fightId = keccak256(abi.encodePacked("operator-revenue-100", i));
+            _createAndJoin(fightId, address(sairi), stake);
+
+            vm.prank(resolver);
+            escrow.resolveFight(fightId, playerA);
+        }
+
+        assertEq(sairi.balanceOf(owner) - ownerBefore, ownerFeePerFight * fightCount);
+        assertEq(sairi.balanceOf(resolver) - resolverBefore, resolverFeePerFight * fightCount);
+        assertEq(sairi.balanceOf(escrow.BURN_ADDRESS()) - burnBefore, burnInputPerFight * fightCount);
+        assertEq(sairi.balanceOf(address(escrow)), 0);
+        assertEq(escrow.reservedTokenBalance(address(sairi)), 0);
+    }
+
     function testResolveFightSwapPathRevertsWhenMinSairiOutZero() external {
         bytes32 fightId = _fightId("resolve-minout-zero");
         _createAndJoin(fightId, address(usdc), STAKE_6);

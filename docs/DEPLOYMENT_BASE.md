@@ -6,6 +6,7 @@
 2. Fill:
    - `BASE_RPC_URL`
    - `BASESCAN_API_KEY`
+   - `ETHERSCAN_API_KEY` (set this to the same BaseScan API key value for Foundry trace decoding)
    - `PRIVATE_KEY`
    - `RESOLVER_ADDRESS`
    - `OWNER_ADDRESS`
@@ -18,6 +19,19 @@
 This runs:
 - `forge script script/Deploy.s.sol:Deploy --broadcast`
 - BaseScan verification through `--verifier etherscan --verifier-url https://api.basescan.org/api`
+
+## Trace Configuration Note
+
+Foundry uses the generic "Etherscan" verifier and trace-enrichment path even on Base. That means:
+
+- `BASESCAN_API_KEY` is used by the deployment and verify scripts.
+- `ETHERSCAN_API_KEY` should also be set to the same BaseScan API key if you want clean verbose traces in fork tests.
+
+If `ETHERSCAN_API_KEY` is not set, deployment still works, but `forge test -vv` on Base forks may emit:
+
+```text
+WARN evm::traces::external: etherscan config not found
+```
 
 ## 3. Verify Existing Deployment
 ```bash

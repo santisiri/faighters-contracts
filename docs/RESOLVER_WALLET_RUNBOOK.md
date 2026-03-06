@@ -17,6 +17,7 @@ Use `.env` (copy from `.env.example`) with:
 
 Optional for deployment/verification:
 - `BASESCAN_API_KEY`
+- `ETHERSCAN_API_KEY` (set equal to `BASESCAN_API_KEY` for Base fork trace decoding)
 - `PRIVATE_KEY` (deployer)
 
 ## 3. Shift Start Checklist (Resolver Operator)
@@ -26,6 +27,7 @@ Optional for deployment/verification:
    - `cast call "$ESCROW_ADDRESS" "paused()(bool)" --rpc-url "$BASE_RPC_URL"`
 3. Ensure resolver wallet has enough ETH for gas on Base.
 4. Confirm backend quote service is healthy for `minSairiOut`.
+5. If running fork tests or debugging verbose traces, ensure `ETHERSCAN_API_KEY` is present. Without it, Foundry can still execute the tests but external traces from Base contracts are less decoded.
 
 ## 4. Fight Preflight Checks
 Before any state-changing call:

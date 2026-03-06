@@ -444,6 +444,7 @@ BASE_CHAIN_ID=8453
 
 # Explorer API key (https://basescan.org/apis)
 BASESCAN_API_KEY=replace_with_basescan_api_key
+ETHERSCAN_API_KEY=replace_with_same_basescan_api_key
 
 # Deployer key used by forge script/verify commands
 PRIVATE_KEY=replace_with_deployer_private_key_hex_without_0x
@@ -464,6 +465,7 @@ RESOLVER_PRIVATE_KEY=replace_with_resolver_private_key_hex_without_0x
 | `BASE_RPC_URL` | Yes (deploy/tests on fork) | `https://mainnet.base.org` | RPC endpoint for Base chain reads/writes | All broadcast calls and fork tests use this endpoint |
 | `BASE_CHAIN_ID` | Optional metadata | `8453` | Informational chain id variable | Not consumed directly by scripts (chain enforced inside deploy script contract) |
 | `BASESCAN_API_KEY` | Yes (verification) | `abc123...` | API key for BaseScan verification | Required by deploy-and-verify and verify scripts |
+| `ETHERSCAN_API_KEY` | Recommended for fork traces | `abc123...` | Same BaseScan API key, exposed under the generic name Foundry trace enrichment expects | Removes `etherscan config not found` warnings and improves decoding of external contract traces on Base fork tests |
 | `PRIVATE_KEY` | Yes (deployment) | `<hex-without-0x>` | Deployer private key | Signs deploy transactions |
 | `RESOLVER_ADDRESS` | Yes | `0x...` | Constructor resolver address | Controls resolve + resolver-only operations |
 | `OWNER_ADDRESS` | Yes | `0x...` | Constructor owner address | Controls admin actions |
@@ -482,6 +484,21 @@ RESOLVER_PRIVATE_KEY=replace_with_resolver_private_key_hex_without_0x
 - Use dedicated keys for deployer, owner, resolver.
 - Prefer multisig for owner in production.
 - Rotate resolver key on incident and update on-chain via `setResolver`.
+
+### Trace decoding and BaseScan
+
+Foundry uses explorer APIs to enrich fork-test traces for external contracts. That is what the `etherscan config not found` warning is about.
+
+- It does not affect contract execution, deployment, or test correctness.
+- It only affects how much of a verbose trace Foundry can decode for contracts outside your repo, such as the Base Uniswap router and live token contracts.
+- BaseScan is Etherscan-compatible, so the same BaseScan API key is used for this feature.
+- In this repository, set both `BASESCAN_API_KEY` and `ETHERSCAN_API_KEY` to the same BaseScan API key value.
+
+If `ETHERSCAN_API_KEY` is missing, fork tests still run, but verbose traces are less readable and Foundry may print:
+
+```text
+WARN evm::traces::external: etherscan config not found
+```
 
 ---
 
