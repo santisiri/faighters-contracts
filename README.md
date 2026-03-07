@@ -7,6 +7,7 @@ Production-focused Solidity escrow contract for two-player adversarial fights on
 ## Table of Contents
 
 - [Contract API Reference](#contract-api-reference)
+- [Governance Reference](#governance-reference)
 - [1. PROJECT OVERVIEW](#1-project-overview)
 - [2. ARCHITECTURE](#2-architecture)
 - [3. TECHNOLOGY STACK](#3-technology-stack)
@@ -33,6 +34,12 @@ Production-focused Solidity escrow contract for two-player adversarial fights on
 For a full, function-by-function contract deep dive (state, access rules, events, errors, lifecycle transitions, and resolver/owner operations), see:
 
 - [`docs/CONTRACT_REFERENCE.md`](/Users/santisiri/AI/faighters/docs/CONTRACT_REFERENCE.md)
+
+## Governance Reference
+
+For a dedicated breakdown of protocol governance, resolver authority, mutable admin controls, and which economic or infrastructure choices are hardcoded versus governable, see:
+
+- [`docs/GOVERNANCE.md`](/Users/santisiri/AI/faighters/docs/GOVERNANCE.md)
 
 ## 1. PROJECT OVERVIEW
 
